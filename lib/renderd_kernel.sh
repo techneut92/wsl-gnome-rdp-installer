@@ -26,14 +26,18 @@
 #     grd-vgem-journal-* in the author's local notes).
 #
 # Pipeline in install_renderd_kernel(), when INSTALL_RENDERD=1:
-#   renderd_active                   → skip rebuild       │ short-path
-#   renderd_modules_built_for_current_kernel
-#                                    → skip rebuild       │ already cached
-#   renderd_preflight                → fail fast
-#   renderd_install_build_deps                                heavy
-#   renderd_clone_or_refresh_source                           ↓
-#   renderd_apply_config             → VGEM=m, VKMS=m, BTF=n
-#   renderd_build_modules            → make modules_prepare + M=...
+#   renderd_active && renderd_vkms_active && modules cached
+#                                    → skip                │ short-path
+#   renderd_fetch_prebuilt           → tarball from CI    │ ~5s, happy path
+#       └ vermagic check + module_layout CRC vs MS stock  │ falls back on
+#                                                            mismatch
+#   renderd_local_build (fallback)
+#       ├ renderd_preflight          → fail fast on disk
+#       ├ renderd_install_build_deps                       │ heavy
+#       ├ renderd_clone_or_refresh_source                  │ ↓
+#       ├ renderd_apply_config       → VGEM=m, VKMS=m
+#       └ renderd_build_modules      → full kernel build
+#                                      LOCALVERSION="" + GCC-16 -Werror fix
 #   renderd_install_modules          → /lib/modules/$(uname -r)/extra/
 #   renderd_persist_load             → /etc/modules-load.d/wsl-renderd.conf
 #   renderd_modprobe_now
@@ -46,8 +50,13 @@
 # Non-interactive overrides:
 #   INSTALL_RENDERD_FORCE=1
 #                        rebuild even if modules already match
+#   RENDERD_LOCAL_BUILD=1
+#                        skip prebuilt download, always build from source
+#   RENDERD_PREBUILT_URL_BASE=…
+#                        point at a fork's release host (testing/self-hosting)
 #   RENDERD_SRCDIR=…     override clone location (default: ~/.cache/wsl-gnome-rdp/WSL2-Linux-Kernel)
 #   RENDERD_TAG=…        override kernel tag (default: linux-msft-wsl-<uname -r prefix>)
+#   RENDERD_JOBS=N       override -j parallelism for the local build (default: nproc)
 
 RENDERD_LOAD_FILE=/etc/modules-load.d/wsl-renderd.conf
 # /lib/modules/$(uname -r)/extra is the canonical drop-in dir for
@@ -73,6 +82,36 @@ renderd_active() {
 renderd_modules_built_for_current_kernel() {
   local d; d=$(renderd_modules_dir)
   [ -f "$d/vgem.ko" ] && [ -f "$d/vkms.ko" ]
+}
+
+# 0 = vkms-backed /dev/dri/card1 already exposed, 1 = not.
+# Microsoft's stock kernel ships vgem.ko on recent versions, so
+# `renderd_active` (renderD128) being true is no longer enough to
+# conclude "we have nothing to do" — vkms is the actually-missing piece.
+renderd_vkms_active() {
+  [ -e /dev/dri/card1 ] || return 1
+  local link
+  link=$(readlink /sys/class/drm/card1 2>/dev/null) || return 1
+  [[ $link == */vkms/* ]]
+}
+
+# Strong sanity check on a candidate .ko before we install it:
+# vermagic alone isn't enough — CRCs on `module_layout` (the symbol that
+# encodes struct module's ABI) can differ between our build and MS's even
+# when vermagic matches, e.g. if BTF was disabled on our side. We compare
+# our .ko's module_layout CRC against MS's stock vgem.ko's, when present.
+# Returns 0 if compatible (or no reference module available), 1 if not.
+renderd_verify_module_compat() {
+  local ko=$1
+  local stock_vgem="/lib/modules/$(uname -r)/kernel/drivers/gpu/drm/vgem/vgem.ko"
+  [ -f "$stock_vgem" ] || return 0   # nothing to compare against
+  command -v modprobe >/dev/null || return 0
+  local ours stock
+  ours=$(modprobe --dump-modversions  "$ko"        2>/dev/null \
+           | awk '$2=="module_layout"{print $1; exit}')
+  stock=$(modprobe --dump-modversions "$stock_vgem" 2>/dev/null \
+           | awk '$2=="module_layout"{print $1; exit}')
+  [ -n "$ours" ] && [ -n "$stock" ] && [ "$ours" = "$stock" ]
 }
 
 # Pre-build sanity. Fails fast before we burn build time.
@@ -152,27 +191,35 @@ renderd_clone_or_refresh_source() {
 }
 
 # Apply our overlay on top of Microsoft's WSL config:
-#   CONFIG_DRM_VKMS=m       — virtual KMS (provides /dev/dri/card1)
-#   CONFIG_DRM_VGEM=m       — virtual GEM render node (/dev/dri/renderD128)
-#   CONFIG_DEBUG_INFO_BTF=n — dodges a GCC 16.1.1 -Werror=discarded-qualifiers
-#                             issue inside tools/bpf/resolve_btfids on
-#                             Fedora 44. Cost: no in-kernel BTF info; harmless
-#                             for our use.
+#   CONFIG_DRM_VKMS=m  — virtual KMS (/dev/dri/card1)
+#   CONFIG_DRM_VGEM=m  — virtual GEM render node (/dev/dri/renderD128).
+#                        Already shipped =m by Microsoft on recent kernels
+#                        (6.6.114.1+); kept here so older kernels still
+#                        get coverage and so /lib/modules/.../extra has a
+#                        CRC-matching backup if MS ever drops it.
+#   CONFIG_DRM_GEM_SHMEM_HELPER=m  — VKMS dep, ensure available as module.
+#
+# We intentionally KEEP CONFIG_DEBUG_INFO_BTF=y. Microsoft ships its kernel
+# with CONFIG_DEBUG_INFO_BTF_MODULES=y, which adds two fields (btf_data,
+# btf_data_size) to `struct module`. Disabling BTF here changes struct
+# module's layout, which changes every module CRC including module_layout
+# — vkms.ko built without BTF gets rejected by Microsoft's running kernel
+# with "disagrees about version of symbol module_layout" even though
+# vermagic matches. The HOSTCFLAGS workaround in renderd_build_modules
+# handles the GCC-16 -Werror that previously motivated the BTF disable.
 #
 # Note: =m, NOT =y. We're building modules, not patching the kernel.
-# `make modules_prepare` then `make M=…` for each driver dir.
 renderd_apply_config() {
   local srcdir=$1
   [ -f "$srcdir/arch/x86/configs/config-wsl" ] \
     || die "arch/x86/configs/config-wsl missing in $srcdir — kernel layout changed?"
-  ui_spin "Configure kernel (VGEM=m, VKMS=m, BTF=n)" bash -c '
+  ui_spin "Configure kernel (VGEM=m, VKMS=m, BTF kept on)" bash -c '
     set -e
     cd "'"$srcdir"'"
     cp arch/x86/configs/config-wsl .config
     ./scripts/config --module  CONFIG_DRM_VGEM
     ./scripts/config --module  CONFIG_DRM_VKMS
     ./scripts/config --module  CONFIG_DRM_GEM_SHMEM_HELPER
-    ./scripts/config --disable CONFIG_DEBUG_INFO_BTF
     make olddefconfig
   ' || die "kernel module configuration failed"
 }
@@ -183,12 +230,23 @@ renderd_apply_config() {
 # vmlinux + modules build; .ko's land in their driver dirs as a side
 # effect. Slow (~5–10 min) — most users get the prebuilt instead, this
 # is the fallback for offline / custom-kernel / no-prebuilt cases.
+#
+# LOCALVERSION="" tells scripts/setlocalversion to skip its SCM-suffix
+# branch. Otherwise it appends `+` to UTS_RELEASE because Microsoft tags
+# as `linux-msft-wsl-X.Y.Z.W` (not `vX.Y.Z`), and modprobe rejects the
+# resulting `…-WSL2+` vermagic against the stock `…-WSL2` running kernel.
+#
+# HOSTCFLAGS=-Wno-error=discarded-qualifiers works around a strchr()
+# const-cast in tools/bpf/resolve_btfids/libbpf/libbpf.c that newer GCCs
+# (≥16) flag fatal under host-side -Werror. Older GCCs don't warn;
+# applying unconditionally is harmless.
 renderd_build_modules() {
   local srcdir=$1
-  local jobs; jobs=$(nproc)
-  [ "$jobs" -gt 8 ] && jobs=8
+  local jobs=${RENDERD_JOBS:-$(nproc)}
   ui_spin "Build kernel + modules (-j$jobs, ~5–10 min)" \
     make -C "$srcdir" -j"$jobs" \
+         LOCALVERSION="" \
+         HOSTCFLAGS="-Wno-error=discarded-qualifiers" \
     || die "kernel/module build failed"
   [ -f "$srcdir/drivers/gpu/drm/vgem/vgem.ko" ] \
     || die "vgem.ko missing after build"
@@ -263,6 +321,18 @@ renderd_fetch_prebuilt() {
     return 1
   fi
   ui_detail "vermagic verified ($got)"
+
+  # CRC sanity. Vermagic match doesn't prove the modules will load —
+  # CRCs on module_layout (struct module's ABI marker) can still differ
+  # if the prebuilt was made with a config option that changed struct
+  # module's layout (e.g. CONFIG_DEBUG_INFO_BTF_MODULES toggled). When
+  # MS ships a stock vgem.ko we can compare directly against it.
+  if ! renderd_verify_module_compat "$tmpdir/vgem.ko"; then
+    ui_warn "Prebuilt module_layout CRC differs from stock kernel's"
+    ui_detail "modprobe would reject these — falling back to local build"
+    rm -rf "$tmpdir"
+    return 1
+  fi
 
   RENDERD_PREBUILT_VGEM="$tmpdir/vgem.ko"
   RENDERD_PREBUILT_VKMS="$tmpdir/vkms.ko"
@@ -353,31 +423,40 @@ install_renderd_kernel() {
 
   ui_step "renderd modules"
 
-  # Short-path: VGEM-backed renderD128 is already there (could be from
-  # our previously-installed modules, OR an older custom-kernel install
-  # that built VGEM=y into vmlinux). Either way, nothing to do — unless
-  # FORCE is set, OR our modules got out of sync with the running kernel
-  # (Microsoft bumped uname -r since the last build).
-  if renderd_active \
+  # Short-path: BOTH /dev/dri/renderD128 (vgem) and /dev/dri/card1 (vkms)
+  # already there, AND our .ko's are present in extra/ for the running
+  # kernel. Nothing to do — unless FORCE is set.
+  if renderd_active && renderd_vkms_active \
      && renderd_modules_built_for_current_kernel \
      && [ "${INSTALL_RENDERD_FORCE:-0}" != "1" ]; then
-    ui_skip "modules current and active for $(uname -r)"
+    ui_skip "vgem + vkms current and active for $(uname -r)"
     renderd_add_user_groups
     return 0
   fi
+
+  # Pre-existing custom-kernel install (VGEM=y in vmlinux) — vermagic
+  # has '+', our prebuilts can't match, and there's no card1 path here
+  # since the user's kernel was rebuilt before we shipped vkms support.
+  # Don't touch.
   if renderd_active && ! renderd_user_opted_in \
+     && [[ "$(uname -r)" == *+* ]] \
      && [ "${INSTALL_RENDERD_FORCE:-0}" != "1" ]; then
-    # User has VGEM available from somewhere we didn't install
-    # (likely the older full-kernel-rebuild path). Don't touch.
-    ui_skip "renderD128 already present (not installed by us — leaving alone)"
+    ui_skip "custom kernel + renderD128 present (not installed by us — leaving alone)"
     ui_detail "remove your .wslconfig kernel= pin to switch to module-mode"
     renderd_add_user_groups
     return 0
   fi
 
-  # Need to install. Kernel-bump auto-rebuild lands here too.
+  # Need to install. Cases that land here:
+  #   - first-time opt-in, nothing loaded
+  #   - first-time opt-in, MS-shipped vgem already there but vkms missing
+  #   - kernel-bump auto-rebuild (opted in but modules vanished)
+  #   - INSTALL_RENDERD_FORCE=1
   if renderd_user_opted_in && ! renderd_modules_built_for_current_kernel; then
     ui_warn "Kernel bumped to $(uname -r) — fetching/building modules to match"
+  fi
+  if renderd_active && ! renderd_vkms_active; then
+    ui_detail "stock kernel ships vgem (renderD128 present); installing our vkms for /dev/dri/card1"
   fi
 
   # Try the prebuilt path first (5–10s download vs. 60–90s local build).
@@ -404,9 +483,12 @@ install_renderd_kernel() {
   renderd_modprobe_now
   renderd_add_user_groups
 
-  if renderd_active; then
-    ui_ok "renderD128 ready"
-    ui_detail "/dev/dri/renderD128 backed by VGEM"
+  if renderd_active && renderd_vkms_active; then
+    ui_ok "vgem + vkms ready"
+    ui_detail "/dev/dri/renderD128 (vgem) + /dev/dri/card1 (vkms)"
+  elif renderd_active; then
+    ui_warn "vgem loaded but vkms didn't — /dev/dri/card1 missing"
+    ui_detail "check: ls /dev/dri/  &&  sudo dmesg | tail"
   else
     ui_warn "modprobe completed but /dev/dri/renderD128 not present yet"
     ui_detail "check: ls /dev/dri/  &&  sudo dmesg | tail"

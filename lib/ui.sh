@@ -76,6 +76,13 @@ _ui_chk_off='◯'
 # is sourced standalone (smoke tests, manual debugging).
 _ui_die() { printf '%s✗%s %s\n' "$UI_RED" "$UI_RESET" "$*" >&2; exit 1; }
 
+# UI output goes to /dev/tty so it stays visible when the caller captures
+# the function's stdout via $( ). The actual return value (the typed
+# string / selected tags) goes to stdout, where $( ) expects it.
+# Reading is from fd 0 directly — `read -p` would write the prompt to
+# stderr (which $( ) doesn't capture, but stderr isn't always the TTY
+# either), so we write the prompt explicitly to /dev/tty first.
+
 ui_input() {
   local label="$1" default="${2:-}"
   if [ "$UI_TTY" != "1" ] || ! [ -t 0 ]; then
@@ -93,11 +100,15 @@ ui_input() {
       "$UI_BOLD" "$label" "$UI_RESET")
   fi
   local input
-  IFS= read -rp "$prompt" input
+  printf '%s' "$prompt" >/dev/tty
+  IFS= read -r input </dev/tty
   input="${input:-$default}"
   # Collapse the multi-part prompt into a single dim summary line.
-  printf '\033[1A\033[2K  %s✓%s %s%s%s\n' \
-    "$UI_GREEN" "$UI_RESET" "$UI_DIM" "$label: $input" "$UI_RESET"
+  # \r returns the cursor to column 1 in case `read` left it past the
+  # prompt+input on a wrapped line; \033[1A then moves up to that line;
+  # \033[2K clears it; printf overwrites with the summary.
+  printf '\r\033[1A\033[2K  %s✓%s %s%s%s\n' \
+    "$UI_GREEN" "$UI_RESET" "$UI_DIM" "$label: $input" "$UI_RESET" >/dev/tty
   printf '%s' "$input"
 }
 
@@ -111,11 +122,12 @@ ui_password() {
     "$UI_BOLD$UI_CYAN" "$_ui_q" "$UI_RESET" \
     "$UI_BOLD" "$label" "$UI_RESET")
   local input
-  IFS= read -rsp "$prompt" input
-  echo
+  printf '%s' "$prompt" >/dev/tty
+  IFS= read -rs input </dev/tty
+  printf '\n' >/dev/tty
   # Collapse into a single ✓ line; never show the password content.
-  printf '\033[1A\033[2K  %s✓%s %s%s%s\n' \
-    "$UI_GREEN" "$UI_RESET" "$UI_DIM" "$label: ********" "$UI_RESET"
+  printf '\r\033[1A\033[2K  %s✓%s %s%s%s\n' \
+    "$UI_GREEN" "$UI_RESET" "$UI_DIM" "$label: ********" "$UI_RESET" >/dev/tty
   printf '%s' "$input"
 }
 
@@ -130,6 +142,13 @@ ui_multiselect() {
   if [ "$UI_TTY" != "1" ] || ! [ -t 0 ]; then
     _ui_die "ui_multiselect: not a TTY"
   fi
+
+  # Open fd 3 to the controlling terminal so the menu rendering and
+  # final summary stay visible even when the caller captures stdout
+  # via $( ). Selected tags are emitted on stdout (fd 1) at the end —
+  # those are what $( ) is meant to collect.
+  exec 3>/dev/tty
+
   local title="$1"; shift
 
   local -a tags descs states
@@ -140,33 +159,39 @@ ui_multiselect() {
     states+=("$raw")
   done
   local n=${#tags[@]}
-  [ "$n" -eq 0 ] && return 1
+  if [ "$n" -eq 0 ]; then
+    exec 3>&-
+    return 1
+  fi
 
   # Save terminal state so traps can restore it.
   local _saved_stty
   _saved_stty=$(stty -g 2>/dev/null) || _saved_stty=""
   _ui_multiselect_restore() {
     [ -n "$_saved_stty" ] && stty "$_saved_stty" 2>/dev/null
-    printf '\033[?25h'
+    printf '\033[?25h' >&3 2>/dev/null
+    exec 3>&- 2>/dev/null
   }
   trap _ui_multiselect_restore EXIT INT TERM
   stty -echo -icanon 2>/dev/null
-  printf '\033[?25l'   # hide cursor
+  printf '\033[?25l' >&3   # hide cursor
 
   local cursor=0
   local hint_lines=2   # title + (↑↓ space enter) hint
   local total_lines=$(( hint_lines + n ))
   local first_render=1
 
+  # Render block — every printf goes to fd 3 (the terminal), never
+  # to stdout, so $( ) capture sees no UI noise.
   _ui_multiselect_render() {
-    local i checkbox row_color desc
+    local i checkbox desc
     if [ "$first_render" = "0" ]; then
-      printf '\033[%dA\033[J' "$total_lines"
+      printf '\033[%dA\033[J' "$total_lines" >&3
     fi
     first_render=0
-    printf '%s%s%s%s\n' "$UI_BOLD$UI_CYAN" "$_ui_q" "$UI_RESET" " $UI_BOLD$title$UI_RESET"
+    printf '%s%s%s%s\n' "$UI_BOLD$UI_CYAN" "$_ui_q" "$UI_RESET" " $UI_BOLD$title$UI_RESET" >&3
     printf '  %s↑↓ navigate · space toggle · enter confirm · q/esc cancel%s\n' \
-      "$UI_DIM" "$UI_RESET"
+      "$UI_DIM" "$UI_RESET" >&3
     for ((i=0; i<n; i++)); do
       desc="${descs[i]}"
       if [ "${states[i]}" = "ON" ]; then
@@ -176,9 +201,9 @@ ui_multiselect() {
       fi
       if [ "$i" = "$cursor" ]; then
         printf '  %s❯%s %s %s%s%s\n' \
-          "$UI_CYAN" "$UI_RESET" "$checkbox" "$UI_BOLD" "$desc" "$UI_RESET"
+          "$UI_CYAN" "$UI_RESET" "$checkbox" "$UI_BOLD" "$desc" "$UI_RESET" >&3
       else
-        printf '    %s %s\n' "$checkbox" "$desc"
+        printf '    %s %s\n' "$checkbox" "$desc" >&3
       fi
     done
   }
@@ -187,21 +212,21 @@ ui_multiselect() {
   while :; do
     _ui_multiselect_render
 
-    IFS= read -rsn1 key
+    # Read one keystroke from the terminal directly (not stdin —
+    # so this also works when the caller has stdin redirected).
+    IFS= read -rsn1 key </dev/tty
     case "$key" in
       $'\033')
         # Escape sequence — could be bare ESC or arrow.
-        IFS= read -rsn2 -t 0.05 key2 || key2=""
+        IFS= read -rsn2 -t 0.05 key2 </dev/tty || key2=""
         case "$key2" in
           '[A'|'OA') cursor=$(( (cursor - 1 + n) % n )) ;;   # up
           '[B'|'OB') cursor=$(( (cursor + 1) % n )) ;;        # down
-          '')        # bare ESC = cancel
-                     _ui_multiselect_restore; trap - EXIT INT TERM
+          '')        _ui_multiselect_restore; trap - EXIT INT TERM
                      return 1 ;;
         esac
         ;;
       ' ')
-        # space toggle
         if [ "${states[cursor]}" = "ON" ]; then
           states[cursor]=OFF
         else
@@ -209,11 +234,9 @@ ui_multiselect() {
         fi
         ;;
       ''|$'\n'|$'\r')
-        # enter = confirm
         break
         ;;
       'q'|'Q'|$'\003')
-        # q / Ctrl+C = cancel
         _ui_multiselect_restore; trap - EXIT INT TERM
         return 1
         ;;
@@ -230,19 +253,19 @@ ui_multiselect() {
     esac
   done
 
-  _ui_multiselect_restore
-  trap - EXIT INT TERM
-
   # Collapse the menu to a one-line ✓ summary listing chosen tags.
-  printf '\033[%dA\033[J' "$total_lines"
+  printf '\033[%dA\033[J' "$total_lines" >&3
   local -a chosen=()
   for ((i=0; i<n; i++)); do
     [ "${states[i]}" = "ON" ] && chosen+=("${tags[i]}")
   done
   printf '  %s✓%s %s%s: %s%s\n' \
-    "$UI_GREEN" "$UI_RESET" "$UI_DIM" "$title" "${chosen[*]:-(none)}" "$UI_RESET"
+    "$UI_GREEN" "$UI_RESET" "$UI_DIM" "$title" "${chosen[*]:-(none)}" "$UI_RESET" >&3
 
-  # Output selected tags on stdout for the caller.
+  _ui_multiselect_restore
+  trap - EXIT INT TERM
+
+  # Output selected tags on stdout for the caller's $( ) capture.
   for ((i=0; i<n; i++)); do
     [ "${states[i]}" = "ON" ] && printf '%s\n' "${tags[i]}"
   done

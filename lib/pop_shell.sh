@@ -116,40 +116,45 @@ install_pop_shell() {
   # too — restart it after gnome-shell is back. Drops any in-progress RDP
   # session, but the installer's running in a pts shell, not RDP.
   if systemctl --user is-active --quiet gnome-shell-headless.service; then
-    # Each gnome-extensions list call goes through dbus to
-    # org.gnome.Shell.Extensions. While gnome-shell is restarting,
-    # the dbus name isn't claimed yet — the call BLOCKS until either
-    # gnome-shell registers (good) or dbus's default 25s reply timeout
-    # fires (bad: locks the loop for half a minute per iteration).
-    # Wrap each call in `timeout 2` so the poll never stalls more
-    # than 2s waiting for one dbus reply, and bound the overall wait
-    # at 30s. RuntimeMaxSec on the spinner ui makes a stuck spinner
-    # visible to the operator.
+    # Restart gnome-shell-headless and grd, then sleep long enough
+    # for gnome-shell to claim org.gnome.Shell.Extensions on the
+    # session bus. Polling `gnome-extensions list` over dbus is
+    # unreliable: it returns success-with-empty-list during the
+    # warmup window (gnome-shell registered but extensions not yet
+    # scanned), so the loop never observes pop-shell appearing —
+    # and the FINAL list-check then races the same way and fires
+    # the "hasn't picked it up" warning even though pop-shell IS
+    # loaded (its keybinding init already ran in the journal). The
+    # filesystem is the real source of truth: metadata.json exists,
+    # therefore the extension is installed; gnome-shell will scan
+    # it on this restart cycle.
     ui_spin "Restart gnome-shell-headless to pick up Pop Shell" bash -c '
       set -e
       systemctl --user restart gnome-shell-headless.service
-      for i in $(seq 1 30); do
-        if timeout 2 gnome-extensions list 2>/dev/null \
-             | grep -qx "'"$POP_SHELL_UUID"'"; then
-          break
-        fi
-        sleep 1
-      done
+      sleep 5
       systemctl --user restart gnome-remote-desktop-headless.service 2>/dev/null || true
+      sleep 3
     '
   fi
 
-  if timeout 5 gnome-extensions list 2>/dev/null | grep -qx "$POP_SHELL_UUID"; then
-    timeout 5 gnome-extensions enable "$POP_SHELL_UUID" 2>/dev/null || true
+  if [ -f "$meta" ]; then
+    # Best-effort enable. The dbus method may take a few seconds to
+    # respond on a fresh shell — give it 15s before giving up.
+    timeout 15 gnome-extensions enable "$POP_SHELL_UUID" 2>/dev/null || true
     if timeout 5 gnome-extensions info "$POP_SHELL_UUID" 2>/dev/null \
          | grep -q '^[[:space:]]*Enabled: Yes'; then
       ui_ok "Pop Shell enabled"
     else
-      ui_warn "Pop Shell installed but not enabled"
-      ui_detail "try 'gnome-extensions enable $POP_SHELL_UUID' after a fresh gnome-shell"
+      # `Enabled: No` here usually means dbus didn't get a reply in
+      # time; the extension is staged on disk and gnome-shell loaded
+      # it (see the journal — keybinding init runs at scan time).
+      # Mark ⚠ but don't fail the installer; the extension takes
+      # effect on next mstsc connect either way.
+      ui_warn "Pop Shell installed; enable status not confirmed"
+      ui_detail "verify after mstsc reconnect: gnome-extensions info $POP_SHELL_UUID"
     fi
   else
-    ui_warn "Pop Shell built but gnome-shell hasn't picked it up"
-    ui_detail "it will load on the next gnome-shell start"
+    ui_warn "Pop Shell metadata.json missing — build may not have staged it"
+    ui_detail "$meta"
   fi
 }

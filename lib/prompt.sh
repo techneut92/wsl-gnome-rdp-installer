@@ -105,9 +105,34 @@ _prompt_components() {
 }
 
 # Public entry point — call from install.sh before any heavy work.
+#
+# NONINTERACTIVE=1 skips both prompts entirely and resolves every value
+# from env (with safe defaults). Useful for re-runs from the renew shim
+# in CI / scripted contexts. Requires either RDP_PASSWORD set OR
+# grdctl having stored credentials — otherwise dies cleanly.
 prompt_all_settings() {
   ui_phase "Setup"
-  _prompt_credentials
-  _prompt_components
-  export RDP_USERNAME RDP_PASSWORD REUSE_CREDS
+  if [ "${NONINTERACTIVE:-0}" = "1" ]; then
+    RDP_USERNAME="${RDP_USERNAME:-$USER}"
+    if [ -z "$RDP_PASSWORD" ] && _grdctl_has_stored_creds; then
+      REUSE_CREDS=1
+    else
+      REUSE_CREDS=0
+      [ -z "$RDP_PASSWORD" ] && \
+        die "NONINTERACTIVE=1 with no RDP_PASSWORD and no stored grdctl creds"
+    fi
+    INSTALL_DESKTOP="${INSTALL_DESKTOP:-1}"
+    INSTALL_FIREFOX="${INSTALL_FIREFOX:-1}"
+    INSTALL_ONLYOFFICE="${INSTALL_ONLYOFFICE:-1}"
+    INSTALL_POP_SHELL="${INSTALL_POP_SHELL:-1}"
+    INSTALL_RENDERD="${INSTALL_RENDERD:-1}"
+    ui_skip "non-interactive — using env/defaults for everything"
+    ui_detail "username=$RDP_USERNAME, reuse=${REUSE_CREDS}"
+  else
+    _prompt_credentials
+    _prompt_components
+  fi
+  export RDP_USERNAME RDP_PASSWORD REUSE_CREDS \
+         INSTALL_DESKTOP INSTALL_FIREFOX INSTALL_ONLYOFFICE \
+         INSTALL_POP_SHELL INSTALL_RENDERD
 }

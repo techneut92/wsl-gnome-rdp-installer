@@ -74,13 +74,28 @@ _prompt_components() {
     0|no|false|skip)  renderd_state=OFF ;;
   esac
 
+  # Probe the prebuilt artifact host once so the renderd label can
+  # tell the user up-front whether keeping it checked means a 5–10s
+  # download or a 60–90s local build. Skip the network call entirely
+  # if renderd is already off — no point.
+  local renderd_label
+  if [ "$renderd_state" = "ON" ] && renderd_prebuilt_available; then
+    renderd_label="vgem+vkms kernel modules (prebuilt available, ~5–10s)"
+  elif [ "$renderd_state" = "ON" ]; then
+    ui_warn "No prebuilt vgem/vkms artifact for $(uname -r) — keeping the next box checked will trigger a ~60–90s local build."
+    ui_detail "uncheck if you'd rather skip; you can opt in later by re-running install.sh."
+    renderd_label="vgem+vkms kernel modules (NO prebuilt — ~60–90s local build)"
+  else
+    renderd_label="vgem+vkms kernel modules (off by request)"
+  fi
+
   local choices
   if ! choices=$(ui_multiselect "Optional components" \
     "desktop|GNOME desktop apps (Files, terminal, etc.)|$desktop_state" \
     "firefox|Firefox (flatpak, flathub)|$firefox_state" \
     "onlyoffice|ONLYOFFICE (flatpak, flathub)|$onlyoffice_state" \
     "pop_shell|Pop Shell tiling extension|$pop_state" \
-    "renderd|Custom kernel for /dev/dri/renderD128 (~10m build)|$renderd_state"); then
+    "renderd|$renderd_label|$renderd_state"); then
     die "Cancelled at component selection."
   fi
 

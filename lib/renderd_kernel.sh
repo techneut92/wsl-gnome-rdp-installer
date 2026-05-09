@@ -180,6 +180,21 @@ renderd_pick_kernel_tag() {
   printf 'linux-msft-wsl-%s\n' "$ver"
 }
 
+# 0 = a prebuilt artifact for this kernel exists at the release host,
+# 1 = it doesn't (or the host is unreachable). HEAD-only, no body
+# transfer; --max-time 5 so a flaky network can't block the prompt
+# phase. Used by the prompt to show "prebuilt available" vs. warn the
+# user that local build will be needed.
+renderd_prebuilt_available() {
+  command -v curl >/dev/null 2>&1 || return 1
+  local tag short url
+  tag=$(renderd_pick_kernel_tag)
+  short=${tag#linux-msft-wsl-}
+  url="${RENDERD_PREBUILT_URL_BASE:-https://github.com/techneut92/wsl-renderd-modules/releases/download}"
+  url="$url/$tag/vgem-vkms-modules-$short.tar.gz"
+  curl -fIsS --max-time 5 "$url" >/dev/null 2>&1
+}
+
 # Clone or refresh source. If the cached source's checked-out tag
 # doesn't match what we want, blow away and re-clone — shallow clones
 # can't easily switch tags.

@@ -52,6 +52,36 @@ install_user_environment() {
       XDG_SESSION_TYPE=wayland
 }
 
+install_xdg_user_dirs() {
+  # Standard ~/Downloads, ~/Documents, ~/Pictures, ~/Music, ~/Videos,
+  # ~/Desktop, ~/Templates, ~/Public. On a normal GNOME box these are
+  # created by `xdg-user-dirs-update` running from
+  # /etc/xdg/autostart/xdg-user-dirs.desktop at gnome-session start.
+  # We don't run gnome-session here (`gnome-shell --mode=user` directly),
+  # so the autostart entry never fires and the dirs never appear — file
+  # dialogs get a flat $HOME with .config/.cache/.local visible.
+  #
+  # `xdg-user-dirs-update`:
+  #   - reads /etc/xdg/user-dirs.defaults for the list of dirs + locale
+  #     translations (e.g. Bilder/Pictures depending on $LANG),
+  #   - mkdir -p's each one,
+  #   - writes ~/.config/user-dirs.dirs and ~/.config/user-dirs.locale.
+  # Idempotent — re-running is a no-op once the dirs exist.
+  ui_step "XDG user dirs"
+  if ! command -v xdg-user-dirs-update >/dev/null 2>&1; then
+    ui_skip "xdg-user-dirs-update not installed"
+    return 0
+  fi
+  if [ -f "$HOME/.config/user-dirs.dirs" ] \
+     && [ -d "$HOME/Downloads" ] \
+     && [ -d "$HOME/Documents" ]; then
+    ui_skip "user-dirs.dirs + standard folders already in place"
+    return 0
+  fi
+  ui_spin "Run xdg-user-dirs-update" xdg-user-dirs-update
+  ui_detail "Downloads, Documents, Pictures, Music, Videos, Desktop, Templates, Public"
+}
+
 enable_appindicator_extension() {
   ui_step "AppIndicator extension"
   # Add the AppIndicator/KStatusNotifierItem extension to the user's

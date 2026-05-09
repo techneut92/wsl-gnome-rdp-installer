@@ -115,27 +115,32 @@ install_flatpak_apps() {
 }
 
 # WSLg's Start-Menu publisher (runs at distro startup, generates Windows
-# .lnk shortcuts under "Apps → <distro>") scans only the two canonical
-# XDG paths: /usr/share/applications and ~/.local/share/applications.
-# `flatpak install --user` writes its .desktop files to a third path
-# (~/.local/share/flatpak/exports/share/applications/), which is in
-# XDG_DATA_DIRS for Linux but NOT in WSLg's hardcoded scan list — so
-# user-installed flatpaks never appear in the Windows Start Menu.
+# .lnk shortcuts under "Apps → <distro>") scans only /usr/share/applications.
+# Microsoft's docs claim ~/.local/share/applications is also walked, but
+# empirically it isn't — the per-distro Start Menu folder under
+# %AppData%\Microsoft\Windows\Start Menu\Programs\<distro> contains
+# entries from /usr/share only (verified on a fresh FedoraTest 2026-05-09).
 #
-# Symlink the per-app .desktop files (and only those) into
-# ~/.local/share/applications so WSLg picks them up. Symlinks (not
-# copies) keep flatpak the source of truth — Exec lines, version-bumped
-# fields, and so on track upstream automatically.
+# `flatpak install --user` writes its .desktop files to
+# ~/.local/share/flatpak/exports/share/applications/ — XDG-visible to
+# Linux clients (gnome-shell finds them in the dash) but invisible to
+# WSLg's publisher. Same goes for icons in
+# ~/.local/share/flatpak/exports/share/icons/.
 #
-# WSLg only republishes at distro startup, so existing WSL sessions
-# need a `wsl -t <distro>` (or `wsl --shutdown`) to refresh the Start
-# Menu after this runs.
+# Symlink the per-app .desktop files into /usr/share/applications and
+# mirror the per-app icon tree into /usr/share/icons/hicolor/.../apps/
+# so WSLg finds both. Symlinks (not copies) keep flatpak the source of
+# truth — upstream-bumped Exec lines + new icon sizes flow through
+# without re-running this step.
+#
+# WSLg only republishes at distro startup; surfaces in the verify hint
+# via FLATPAKS_NEWLY_LINKED=1 so the user knows to `wsl -t <distro>`.
 expose_user_flatpaks_to_wslg() {
   local src="$HOME/.local/share/flatpak/exports/share/applications"
-  local dst="$HOME/.local/share/applications"
+  local dst="/usr/share/applications"
   [ -d "$src" ] || return 0
   ui_step "Expose flatpaks to Windows Start Menu (WSLg)"
-  mkdir -p "$dst"
+
   local f base linked=0 already=0
   for f in "$src"/*.desktop; do
     [ -e "$f" ] || continue
@@ -144,14 +149,36 @@ expose_user_flatpaks_to_wslg() {
       already=$((already + 1))
       continue
     fi
-    ln -sfn "$f" "$dst/$base"
+    sudo ln -sfn "$f" "$dst/$base"
     linked=$((linked + 1))
   done
+
+  # Mirror per-app icons (hicolor tree) into /usr/share/icons. WSLg's
+  # publisher embeds the icon into the .lnk shortcut by reading
+  # standard XDG icon paths. Without this, Start Menu entries get a
+  # generic Linux icon. Per-file symlinks because we don't want to
+  # shadow the whole hicolor tree — only the two app-prefixed entries.
+  local icon_src="$HOME/.local/share/flatpak/exports/share/icons"
+  local icon_dst="/usr/share/icons"
+  local icon
+  if [ -d "$icon_src" ]; then
+    while IFS= read -r icon; do
+      local rel="${icon#"$icon_src/"}"
+      local target="$icon_dst/$rel"
+      if [ -L "$target" ] && [ "$(readlink -f "$target")" = "$(readlink -f "$icon")" ]; then
+        continue
+      fi
+      sudo install -d "$(dirname "$target")"
+      sudo ln -sfn "$icon" "$target"
+    done < <(find "$icon_src" -type l \
+                  \( -name 'org.mozilla.firefox*' \
+                  -o -name 'org.onlyoffice.desktopeditors*' \) 2>/dev/null)
+  fi
+
   if [ "$linked" -gt 0 ]; then
-    ui_ok "Linked $linked flatpak .desktop entries"
+    ui_ok "Linked $linked flatpak .desktop entries (+ icons)"
     ui_detail "$dst → $src"
     # Drives the "distro restart needed" hint in verify_and_print_summary.
-    # WSLg only walks the .desktop scan paths at distro startup.
     export FLATPAKS_NEWLY_LINKED=1
   else
     ui_skip "All $already flatpak .desktop entries already exposed"

@@ -12,8 +12,12 @@
 # gnome-remote-desktop source patch (see notes/grd-vgem-journal-* in the
 # author's local notes for the three-blocker analysis).
 #
+# Opt-in is decided upfront by lib/prompt.sh::prompt_all_settings (the
+# component checklist toggles INSTALL_RENDERD); install.sh only invokes
+# install_renderd_kernel when INSTALL_RENDERD=1. No further prompting
+# happens inside this module.
+#
 # Pipeline in install_renderd_kernel():
-#   prompt_renderd_optin                                  ┐
 #   renderd_already_active           → skip rebuild       │ skippable
 #   renderd_preflight                → fail fast          │
 #   renderd_install_build_deps                            │
@@ -25,9 +29,7 @@
 #   renderd_add_user_groups          → video, render
 #   renderd_print_apply_instructions → user runs `wsl --shutdown`
 #
-# Non-interactive controls:
-#   INSTALL_RENDERD=1    skip prompt, install
-#   INSTALL_RENDERD=0    skip prompt, skip
+# Non-interactive overrides:
 #   INSTALL_RENDERD_FORCE=1
 #                        rebuild even if VGEM is already active
 #   RENDERD_SRCDIR=…     override clone location (default: ~/.cache/wsl-gnome-rdp/WSL2-Linux-Kernel)
@@ -43,62 +45,6 @@ renderd_already_active() {
   local link
   link=$(readlink /sys/class/drm/renderD128 2>/dev/null) || return 1
   [[ $link == */vgem/* ]]
-}
-
-# Print the explainer + ask. Returns 0 to install, 1 to skip.
-prompt_renderd_optin() {
-  case "${INSTALL_RENDERD:-}" in
-    0|no|false|skip)
-      ui_skip "Render-node kernel (INSTALL_RENDERD=$INSTALL_RENDERD)"
-      return 1
-      ;;
-    1|yes|true)
-      ui_ok "Render-node kernel: non-interactive install (INSTALL_RENDERD=$INSTALL_RENDERD)"
-      return 0
-      ;;
-  esac
-
-  cat <<'EOF'
-
-──────────────────────────────────────────────────────────────────
-  Optional: build a custom WSL kernel for /dev/dri/renderD128
-──────────────────────────────────────────────────────────────────
-
-  Some Linux apps gate features on a DRM render node — PipeWire
-  screen capture (xdg-desktop-portal, OBS), certain Wayland
-  clients, EGL device-platform consumers, browsers' GPU sandboxing
-  checks. Microsoft's stock WSL kernel ships no DRM device at all,
-  so those features silently disable themselves.
-
-  This step builds a kernel with CONFIG_DRM_VGEM=y + CONFIG_DRM_VKMS=y
-  to expose /dev/dri/renderD128 as a virtual render node.
-
-  What this is NOT:
-    • This does NOT enable real GPU acceleration. VGEM is virtual —
-      apps still render via llvmpipe (CPU). It only unblocks code
-      paths that disable themselves when no render node exists.
-    • This does NOT fix the chroma watermark in the RDP video
-      stream — that needs a separate gnome-remote-desktop patch.
-
-  Cost:
-    • 5–10 min build time (uses all CPU cores).
-    • ~500 MB of kernel build dependencies installed.
-    • Requires `wsl --shutdown` from Windows to apply.
-    • Reversible: we back up .wslconfig before modifying it.
-
-  Skip with INSTALL_RENDERD=0 to silence this prompt next time.
-
-EOF
-  local reply
-  read -rp "  Build & install custom kernel now? [y/N]: " reply
-  echo
-  case "${reply,,}" in
-    y|yes) return 0 ;;
-    *)
-      ui_skip "Render-node kernel (re-run with INSTALL_RENDERD=1 to install non-interactively)"
-      return 1
-      ;;
-  esac
 }
 
 # Pre-build sanity. Fails fast before we burn 5–10 min compiling.
@@ -355,10 +301,10 @@ renderd_print_apply_instructions() {
 EOF
 }
 
-# Public entry point — call from install.sh.
+# Public entry point — call from install.sh. Caller is responsible for
+# checking INSTALL_RENDERD=1 (lib/prompt.sh sets that from the upfront
+# component menu) before invoking; this function does no further opt-in.
 install_renderd_kernel() {
-  prompt_renderd_optin || return 0
-
   ui_step "Custom kernel build"
 
   if renderd_already_active && [ "${INSTALL_RENDERD_FORCE:-0}" != "1" ]; then

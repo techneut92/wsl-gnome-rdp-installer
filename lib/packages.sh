@@ -50,9 +50,13 @@ install_packages() {
 
   if [ "${INSTALL_DESKTOP:-1}" = "1" ]; then
     install_desktop_apps
+  else
+    ui_skip "Full GNOME desktop apps (deselected)"
+  fi
+  if [ "${INSTALL_FLATPAK:-1}" = "1" ]; then
     install_flatpak_apps
   else
-    ui_skip "Full GNOME desktop apps (-m / INSTALL_DESKTOP=0)"
+    ui_skip "Flatpak desktop apps (deselected)"
   fi
 }
 

@@ -19,7 +19,6 @@ RDP_USERNAME="${RDP_USERNAME:-}"
 RDP_PASSWORD="${RDP_PASSWORD:-}"
 TLS_DIR="${TLS_DIR:-$HOME/.local/share/gnome-remote-desktop}"
 SYSTEMD_USER_DIR="${SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
-INSTALL_DESKTOP="${INSTALL_DESKTOP:-1}" # 1 = pull in the full GNOME desktop group (Files, terminal, etc.)
 
 usage() {
   cat <<EOF
@@ -27,10 +26,18 @@ Usage: $0 [-u USERNAME] [-p PASSWORD] [-P PORT] [-m]
   -u USERNAME    RDP login username  (default: prompt; reused on re-run)
   -p PASSWORD    RDP login password  (default: prompt; reused on re-run)
   -P PORT        RDP listen port     (default: $RDP_PORT)
-  -m             minimal: skip the full GNOME desktop group (headless shell only)
+  -m             minimal: pre-uncheck full GNOME desktop + flatpak apps in
+                 the component menu (still adjustable via the menu)
   -h             show this help
 
-Env vars: RDP_USERNAME, RDP_PASSWORD, RDP_PORT, TLS_DIR, SYSTEMD_USER_DIR, INSTALL_DESKTOP
+The component selection menu (GNOME desktop, flatpak apps, Pop Shell,
+AppIndicator, custom kernel for /dev/dri/renderD128) opens at the start
+of the run. Pre-set any of these via env to skip the default and
+arrive at the menu with the corresponding box pre-checked/unchecked:
+
+  INSTALL_DESKTOP=0/1       INSTALL_FLATPAK=0/1
+  INSTALL_POP_SHELL=0/1     INSTALL_APPINDICATOR=0/1
+  INSTALL_RENDERD=0/1
 EOF
 }
 
@@ -39,12 +46,14 @@ while getopts ":u:p:P:mh" opt; do
     u) RDP_USERNAME="$OPTARG" ;;
     p) RDP_PASSWORD="$OPTARG" ;;
     P) RDP_PORT="$OPTARG" ;;
-    m) INSTALL_DESKTOP=0 ;;
+    # -m: keep prior bundled meaning — pre-uncheck both desktop apps AND
+    # flatpak apps in the menu. User can still re-check either.
+    m) INSTALL_DESKTOP=0; INSTALL_FLATPAK=0 ;;
     h) usage; exit 0 ;;
     *) usage; exit 2 ;;
   esac
 done
-export RDP_PORT RDP_USERNAME RDP_PASSWORD TLS_DIR SYSTEMD_USER_DIR INSTALL_DESKTOP
+export RDP_PORT RDP_USERNAME RDP_PASSWORD TLS_DIR SYSTEMD_USER_DIR
 
 # ---------- Resolve the project root and pull in helpers ----------
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,6 +79,8 @@ export PROJECT_ROOT
 . "$PROJECT_ROOT/lib/pop_shell.sh"
 # shellcheck source=lib/renderd_kernel.sh
 . "$PROJECT_ROOT/lib/renderd_kernel.sh"
+# shellcheck source=lib/prompt.sh
+. "$PROJECT_ROOT/lib/prompt.sh"
 
 # ---------- Sanity ----------
 [ "$EUID" -eq 0 ] && die "Run as your normal user, not root. Sudo is used internally where needed."
@@ -175,34 +186,42 @@ precheck_cgroup_collision
 # `wsl --shutdown` before anything else can succeed.
 precheck_user_at_service           # installs drop-in + start probe
 
+# Ask everything upfront — credentials + which optional components to
+# install. Keeps the rest of the run uninterrupted. Sets RDP_USERNAME,
+# RDP_PASSWORD, REUSE_CREDS, INSTALL_DESKTOP, INSTALL_FLATPAK,
+# INSTALL_POP_SHELL, INSTALL_APPINDICATOR, INSTALL_RENDERD.
+prompt_all_settings
+
 ui_phase "Host setup"
-install_packages                   # uses DISTRO_FAMILY
+install_packages                   # uses DISTRO_FAMILY + INSTALL_DESKTOP/INSTALL_FLATPAK
 enable_lingering                   # safe now: user@$UID.service is healthy
 ensure_user_dbus                   # /run/user setup + dbus polling
 
-ui_phase "Credentials & cert"
-prompt_credentials
+ui_phase "TLS cert"
 ensure_tls_cert                    # winpr-makecert if available, else openssl
 
 ui_phase "RDP services"
 configure_grd                      # grdctl --headless settings
 install_user_environment           # ~/.config/environment.d/*.conf
-enable_appindicator_extension      # tray support for jetbrains-toolbox & friends
+[ "${INSTALL_APPINDICATOR:-1}" = "1" ] && enable_appindicator_extension
 install_x11_unix_fix               # /etc/systemd/system/wslg-x11-unix-fix.service
 install_systemd_units              # write + enable + restart
 
-ui_phase "Tiling extension"
-install_pop_shell                  # build + enable Pop Shell tiling extension
+if [ "${INSTALL_POP_SHELL:-1}" = "1" ]; then
+  ui_phase "Tiling extension"
+  install_pop_shell                # build + enable Pop Shell tiling extension
+fi
 
 ui_phase "Verification"
 verify_and_print_summary
 
 # Optional, opt-in — runs LAST so it's the final thing the user sees.
 # RDP setup is already verified at this point; even if the kernel build
-# fails or the user skips, they have a working desktop. Prompts the user
-# (skip with INSTALL_RENDERD=0); if they say yes, builds a custom kernel
-# with VKMS+VGEM enabled and prints `wsl --shutdown` instructions.
-ui_phase "Optional: custom kernel"
-install_renderd_kernel
+# fails, they have a working desktop. Gated on INSTALL_RENDERD, which the
+# upfront prompt set.
+if [ "${INSTALL_RENDERD:-0}" = "1" ]; then
+  ui_phase "Optional: custom kernel"
+  install_renderd_kernel
+fi
 
 # vim: set ts=2 sw=2 et:

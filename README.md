@@ -45,9 +45,19 @@ cd wsl-gnome-rdp-installer
 ./install.sh
 ```
 
-The script will prompt for an RDP username + password the first time. Defaults to port `3390` (Windows already owns `3389` for its own RDP).
+All interaction happens upfront. On a fresh run you get:
 
-Then from Windows:
+1. An **RDP credentials prompt** — username (defaults to `$USER`), then password asked twice for confirmation. Empty or mismatched re-prompts. On a re-run where `gnome-remote-desktop` already has stored credentials, this is silently skipped (pass `-u`/`-p` to force a change).
+2. A **component checklist** (whiptail-driven, arrow keys to navigate / space to toggle / tab to OK / enter to confirm):
+   - GNOME desktop apps (Files, terminal, …)
+   - Flatpak apps (Firefox, ONLYOFFICE)
+   - Pop Shell tiling extension
+   - AppIndicator system-tray extension
+   - Custom kernel for `/dev/dri/renderD128` (~10 min build, opt-in)
+
+Defaults to port `3390` (Windows already owns `3389` for its own RDP).
+
+After the prompts, the rest of the run is uninterrupted — packages, units, certs, services. Then from Windows:
 
 ```
 mstsc /v:localhost:3390
@@ -72,14 +82,19 @@ Every step is idempotent, so re-running after an upstream fix is safe — alread
 
 ### Flags / env vars
 
+Set any `INSTALL_*` env var to `0`/`1` and the matching component box in the upfront menu starts pre-checked or pre-unchecked accordingly — useful when you want to reuse the same defaults across re-runs without clicking through the menu.
+
 | Flag | Env var          | Purpose |
 |------|------------------|---------|
-| `-u USERNAME` | `RDP_USERNAME` | RDP login username |
-| `-p PASSWORD` | `RDP_PASSWORD` | RDP login password |
+| `-u USERNAME` | `RDP_USERNAME` | RDP login username (skips the username prompt) |
+| `-p PASSWORD` | `RDP_PASSWORD` | RDP login password (skips the password + confirm prompts) |
 | `-P PORT`     | `RDP_PORT`     | RDP listen port (default: `3390`) |
-| `-m`          | `INSTALL_DESKTOP=0` | Minimal: skip the full GNOME desktop app suite (Files, terminal, etc.) |
-|               | `INSTALL_POP_SHELL=0` | Skip the Pop Shell tiling extension build |
-|               | `INSTALL_RENDERD=1` / `0` | Auto-answer the optional custom-kernel prompt (see [Optional: custom kernel for `/dev/dri/renderD128`](#optional-custom-kernel-for-devdrirenderd128)) |
+| `-m`          | (sets `INSTALL_DESKTOP=0` and `INSTALL_FLATPAK=0`) | Minimal: pre-uncheck the GNOME desktop + flatpak boxes in the menu |
+|               | `INSTALL_DESKTOP=0/1`     | Pre-check the GNOME desktop apps box |
+|               | `INSTALL_FLATPAK=0/1`     | Pre-check the flatpak apps box |
+|               | `INSTALL_POP_SHELL=0/1`   | Pre-check the Pop Shell box |
+|               | `INSTALL_APPINDICATOR=0/1` | Pre-check the AppIndicator box |
+|               | `INSTALL_RENDERD=0/1`     | Pre-check the custom-kernel box (see [Optional: custom kernel for `/dev/dri/renderD128`](#optional-custom-kernel-for-devdrirenderd128)) |
 
 ---
 
@@ -102,7 +117,7 @@ Every step is idempotent, so re-running after an upstream fix is safe — alread
 
 ## Optional: custom kernel for `/dev/dri/renderD128`
 
-At the end of the install, you'll be asked whether to build a custom WSL2 kernel that exposes `/dev/dri/renderD128` (a virtual DRM render node, via `CONFIG_DRM_VGEM=y` + `CONFIG_DRM_VKMS=y`). It's off by default — say `y` to opt in, or pre-answer with `INSTALL_RENDERD=1` / `INSTALL_RENDERD=0`.
+The component checklist at the start of the run includes a "Custom kernel for `/dev/dri/renderD128`" box. It's pre-unchecked by default — tick it to opt in, or pre-set `INSTALL_RENDERD=1` to have it pre-checked. The build runs LAST in the pipeline so even if it fails, the rest of the desktop already came up.
 
 **Why you might want it.** Microsoft's stock WSL kernel ships no DRM device at all, so any Linux app that gates a feature on a render node existing silently disables that feature. Adding VGEM unblocks:
 
@@ -172,7 +187,9 @@ This is **distinct** from the multi-distro collision above — same symptom, dif
 ```
 install.sh                                     entry point
 lib/
+  ui.sh                                        colors, headers, ui_spin
   common.sh                                    log/distro detection
+  prompt.sh                                    upfront credential + component prompts (whiptail)
   packages.sh                                  dnf/apt packages, flatpaks
   cgroup_collision.sh                          multi-distro detect + UID renumber
   dbus.sh                                      systemd 259 drop-in + user-bus bootstrap

@@ -1,32 +1,9 @@
 # lib/cert.sh — TLS certificate for the RDP listener.
-
-prompt_credentials() {
-  ui_step "RDP credentials"
-  # Skip prompts on re-run: if neither flag/env was passed AND grd already
-  # has stored credentials, reuse them. grdctl reports a stored username
-  # as "(hidden)" and an empty one as "(empty)".
-  REUSE_CREDS=0
-  if [ -z "$RDP_USERNAME" ] && [ -z "$RDP_PASSWORD" ]; then
-    if grdctl --headless status 2>/dev/null \
-         | grep -qE '^[[:space:]]*Username:[[:space:]]*\(hidden\)'; then
-      ui_skip "reusing existing credentials (pass -u/-p to change)"
-      REUSE_CREDS=1
-    fi
-  fi
-  if [ "$REUSE_CREDS" = "0" ]; then
-    if [ -z "$RDP_USERNAME" ]; then
-      read -r -p "  RDP username [$USER]: " RDP_USERNAME
-      RDP_USERNAME="${RDP_USERNAME:-$USER}"
-    fi
-    if [ -z "$RDP_PASSWORD" ]; then
-      read -r -s -p "  RDP password for $RDP_USERNAME: " RDP_PASSWORD
-      echo
-      [ -z "$RDP_PASSWORD" ] && die "Password cannot be empty."
-    fi
-    ui_ok "credentials captured"
-  fi
-  export RDP_USERNAME RDP_PASSWORD REUSE_CREDS
-}
+#
+# Credential capture moved to lib/prompt.sh::prompt_all_settings, which
+# runs upfront before any heavy work — RDP_USERNAME/RDP_PASSWORD/
+# REUSE_CREDS are already exported by the time this file's functions
+# are called from install.sh.
 
 ensure_tls_cert() {
   ui_step "TLS cert"

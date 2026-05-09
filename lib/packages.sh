@@ -110,6 +110,50 @@ install_flatpak_apps() {
       flathub \
       org.mozilla.firefox \
       org.onlyoffice.desktopeditors
+
+  expose_user_flatpaks_to_wslg
+}
+
+# WSLg's Start-Menu publisher (runs at distro startup, generates Windows
+# .lnk shortcuts under "Apps → <distro>") scans only the two canonical
+# XDG paths: /usr/share/applications and ~/.local/share/applications.
+# `flatpak install --user` writes its .desktop files to a third path
+# (~/.local/share/flatpak/exports/share/applications/), which is in
+# XDG_DATA_DIRS for Linux but NOT in WSLg's hardcoded scan list — so
+# user-installed flatpaks never appear in the Windows Start Menu.
+#
+# Symlink the per-app .desktop files (and only those) into
+# ~/.local/share/applications so WSLg picks them up. Symlinks (not
+# copies) keep flatpak the source of truth — Exec lines, version-bumped
+# fields, and so on track upstream automatically.
+#
+# WSLg only republishes at distro startup, so existing WSL sessions
+# need a `wsl -t <distro>` (or `wsl --shutdown`) to refresh the Start
+# Menu after this runs.
+expose_user_flatpaks_to_wslg() {
+  local src="$HOME/.local/share/flatpak/exports/share/applications"
+  local dst="$HOME/.local/share/applications"
+  [ -d "$src" ] || return 0
+  ui_step "Expose flatpaks to Windows Start Menu (WSLg)"
+  mkdir -p "$dst"
+  local f base linked=0 already=0
+  for f in "$src"/*.desktop; do
+    [ -e "$f" ] || continue
+    base=$(basename "$f")
+    if [ -L "$dst/$base" ] && [ "$(readlink -f "$dst/$base")" = "$(readlink -f "$f")" ]; then
+      already=$((already + 1))
+      continue
+    fi
+    ln -sfn "$f" "$dst/$base"
+    linked=$((linked + 1))
+  done
+  if [ "$linked" -gt 0 ]; then
+    ui_ok "Linked $linked flatpak .desktop entries"
+    ui_detail "$dst → $src"
+    ui_detail "run 'wsl -t <distro>' from Windows to refresh Start Menu"
+  else
+    ui_skip "All $already flatpak .desktop entries already exposed"
+  fi
 }
 
 # Install the standard GNOME desktop app suite (Files/Nautilus, terminal,

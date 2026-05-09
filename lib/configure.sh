@@ -80,26 +80,6 @@ enable_appindicator_extension() {
   log "Enabled AppIndicator extension (takes effect on next gnome-shell start)."
 }
 
-configure_wallpaper() {
-  # Fedora 44 ships GNOME's default wallpapers as JPEG-XL (.jxl) but doesn't
-  # package a gdk-pixbuf JXL loader (gdk-pixbuf2-modules-extra only contains
-  # the XPM loader; libjxl is present but no pixbuf bridge). Mutter then
-  # can't decode the default wallpaper and shows a fallback dotted-cross
-  # pattern through every workspace — looks like a "big dotted grid" over
-  # everything in the RDP session. Override picture-uri{,-dark} to the
-  # vnc-{l,d}.png variants which are also in /usr/share/backgrounds/gnome
-  # and which gdk-pixbuf decodes via the built-in PNG loader. Idempotent.
-  local light='file:///usr/share/backgrounds/gnome/vnc-l.png'
-  local dark='file:///usr/share/backgrounds/gnome/vnc-d.png'
-  if [ ! -f "${light#file://}" ]; then
-    log "vnc-l.png wallpaper not present; skipping wallpaper override."
-    return 0
-  fi
-  log "Setting wallpaper to vnc-{l,d}.png (gnome-backgrounds JXL has no Fedora pixbuf loader)…"
-  gsettings set org.gnome.desktop.background picture-uri      "$light"
-  gsettings set org.gnome.desktop.background picture-uri-dark "$dark"
-}
-
 install_x11_unix_fix() {
   # WSL's /init recreates /tmp/.X11-unix as a symlink to /mnt/wslg/.X11-unix
   # on every boot. Mutter's Xwayland refuses to start when that path is a

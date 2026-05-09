@@ -221,9 +221,20 @@ To complete:
   1. From a Windows shell:   wsl.exe -t ${distro}
   2. Reopen this distro from Windows Terminal — you'll land as $(id -un)
      at the new UID, NOT in a root shell.
-  3. The renumber unit runs automatically on early boot, then disables
+
+     EXPECTED, BENIGN: WSL prints
+       "wsl: Failed to start the systemd user session for 'dylan'"
+     on this first reopen. WSL's /init is hardcoded to start
+     user@1000.service; we just renumbered to a different UID, so it
+     can't find the right unit and times out. Your shell still works.
+
+  3. (Recommended) From Windows again:  wsl.exe -t ${distro}
+     and reopen once more. The second cycle starts cleanly with no
+     warning — /init has cached the new default-user mapping.
+
+  4. The renumber unit runs automatically on early boot, then disables
      and removes itself. Log: /var/log/wsl-renumber-uid.log
-  4. Re-run this installer.
+  5. Re-run this installer.
 EOF
       exit 0
       ;;

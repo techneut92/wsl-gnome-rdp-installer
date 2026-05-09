@@ -253,14 +253,26 @@ ui_multiselect() {
     esac
   done
 
-  # Collapse the menu to a one-line ✓ summary listing chosen tags.
+  # Collapse the menu to a multi-line ✓ summary: title line, then one
+  # bullet per chosen item showing the human-readable description (the
+  # tag is the machine-readable shorthand emitted on stdout). Empty
+  # selection collapses to a single "(none)" line.
   printf '\033[%dA\033[J' "$total_lines" >&3
-  local -a chosen=()
+  local -a chosen_descs=()
   for ((i=0; i<n; i++)); do
-    [ "${states[i]}" = "ON" ] && chosen+=("${tags[i]}")
+    [ "${states[i]}" = "ON" ] && chosen_descs+=("${descs[i]}")
   done
-  printf '  %s✓%s %s%s: %s%s\n' \
-    "$UI_GREEN" "$UI_RESET" "$UI_DIM" "$title" "${chosen[*]:-(none)}" "$UI_RESET" >&3
+  if [ ${#chosen_descs[@]} -eq 0 ]; then
+    printf '  %s✓%s %s%s: (none)%s\n' \
+      "$UI_GREEN" "$UI_RESET" "$UI_DIM" "$title" "$UI_RESET" >&3
+  else
+    printf '  %s✓%s %s%s:%s\n' \
+      "$UI_GREEN" "$UI_RESET" "$UI_DIM" "$title" "$UI_RESET" >&3
+    local d
+    for d in "${chosen_descs[@]}"; do
+      printf '    %s• %s%s\n' "$UI_DIM" "$d" "$UI_RESET" >&3
+    done
+  fi
 
   _ui_multiselect_restore
   trap - EXIT INT TERM

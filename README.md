@@ -155,6 +155,17 @@ The component checklist at the start of the run includes a "Custom kernel for `/
 
 which prints PASS/FAIL for each of: VGEM is the active driver, `/dev/dri/renderD128` exists, `.wslconfig` points at the new kernel, your user is in the `video` and `render` groups.
 
+### Custom-kernel maintenance
+
+Once you opt in, your `.wslconfig` pins the distro to the bzImage we built. **Microsoft's WSL kernel updates stop reaching that distro** — you'll keep running the version we built until you rebuild.
+
+`install_renderd_kernel` checks Microsoft's `linux-msft-wsl-*` tag list at the start of every run and prints an advisory line — either:
+
+- `WSL kernel: 6.18.26.1 (latest from Microsoft)` — you're current, or
+- `⚠ Newer WSL kernel tag available: 6.18.26.1 → 6.20.x.y` — Microsoft has tagged something newer; rebuild with `INSTALL_RENDERD=1 INSTALL_RENDERD_FORCE=1 wsl-rdp-gnome-renew` to pick it up. Costs another ~10 min build.
+
+Skipping the rebuild is fine — your existing custom bzImage keeps working — but you're voluntarily off Microsoft's WSL kernel update train.
+
 ---
 
 ## Multi-distro support

@@ -35,6 +35,47 @@
 #   RENDERD_SRCDIR=…     override clone location (default: ~/.cache/wsl-gnome-rdp/WSL2-Linux-Kernel)
 #   RENDERD_TAG=…        override kernel tag (default: linux-msft-wsl-<uname -r prefix>)
 
+# Compare the running kernel version against Microsoft's most recent
+# linux-msft-wsl-* tag and warn (advisory only — doesn't change flow)
+# if a newer one exists. Once a user opts into a custom kernel, their
+# .wslconfig pins them to the bzImage we built; Microsoft's WSL kernel
+# updates stop reaching that distro until a rebuild. This makes the
+# drift visible at run time.
+#
+# Network call (~1–2s) wrapped in `timeout` so an offline / DNS-down
+# host doesn't stall the installer.
+renderd_check_staleness() {
+  local current_ver newest
+  current_ver=${1:-$(uname -r)}
+  current_ver=${current_ver%%-*}
+  [ -n "$current_ver" ] || return 0
+
+  newest=$(timeout 5 git ls-remote --tags --refs \
+              https://github.com/microsoft/WSL2-Linux-Kernel.git \
+              'refs/tags/linux-msft-wsl-*' 2>/dev/null \
+            | awk '{print $2}' \
+            | sed 's|refs/tags/linux-msft-wsl-||' \
+            | sort -V | tail -1) || return 0
+  [ -n "$newest" ] || return 0
+
+  if [ "$newest" = "$current_ver" ]; then
+    ui_detail "WSL kernel: $current_ver (latest from Microsoft)"
+    return 0
+  fi
+
+  # Confirm `newest` actually sorts after `current_ver` — otherwise
+  # the user is ahead of upstream (running a future tag we somehow
+  # picked up; nothing to warn about).
+  local sort_first
+  sort_first=$(printf '%s\n%s\n' "$current_ver" "$newest" | sort -V | head -1)
+  [ "$sort_first" = "$current_ver" ] || return 0
+
+  ui_warn "Newer WSL kernel tag available: $current_ver → $newest"
+  ui_detail "your custom bzImage is pinned in .wslconfig — Microsoft's"
+  ui_detail "kernel updates won't reach this distro until you rebuild:"
+  ui_detail "  INSTALL_RENDERD=1 INSTALL_RENDERD_FORCE=1 wsl-rdp-gnome-renew"
+}
+
 # 0 = renderD128 already exposed by current kernel via VGEM, 1 = not.
 renderd_already_active() {
   [ -e /dev/dri/renderD128 ] || return 1
@@ -306,6 +347,11 @@ EOF
 # component menu) before invoking; this function does no further opt-in.
 install_renderd_kernel() {
   ui_step "Custom kernel build"
+
+  # Advisory: surface Microsoft's latest WSL kernel tag vs whatever
+  # we're running on, so the user can choose to rebuild against it.
+  # Doesn't change flow — the rebuild itself is gated on FORCE below.
+  renderd_check_staleness
 
   if renderd_already_active && [ "${INSTALL_RENDERD_FORCE:-0}" != "1" ]; then
     ui_skip "renderD128 is already exposed by the running kernel"

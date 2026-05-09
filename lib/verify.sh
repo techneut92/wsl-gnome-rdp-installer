@@ -5,7 +5,11 @@ verify_and_print_summary() {
   local SHELL_OK GRD_OK LISTEN WSL_IP RENDERER
   SHELL_OK=$(systemctl --user is-active gnome-shell-headless.service || true)
   GRD_OK=$(systemctl --user is-active gnome-remote-desktop-headless.service || true)
-  LISTEN=$(ss -tln 2>/dev/null | awk -v p=":$RDP_PORT" '$0~p{found=1} END{print found+0}')
+  # `|| true` on every pipe — set -o pipefail (from install.sh) would
+  # otherwise propagate `grep`-no-match (exit 1) or any single-stage
+  # failure into the assignment, and set -e then kills the script
+  # silently before any of these diagnostic vars are even consumed.
+  LISTEN=$(ss -tln 2>/dev/null | awk -v p=":$RDP_PORT" '$0~p{found=1} END{print found+0}' || true)
   WSL_IP=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 || echo "?")
 
   # Mutter logs "Created surfaceless renderer with GPU" (hardware) or
@@ -14,7 +18,7 @@ verify_and_print_summary() {
   RENDERER=$(journalctl --user -u gnome-shell-headless.service \
                         --since '30 seconds ago' --no-pager 2>/dev/null \
              | grep -iE 'surfaceless renderer|GL renderer|OpenGL renderer' \
-             | tail -1)
+             | tail -1 || true)
 
   if [ "$SHELL_OK" != "active" ] || [ "$GRD_OK" != "active" ] || [ "$LISTEN" -lt 1 ]; then
     warn "Setup didn't come up cleanly:"

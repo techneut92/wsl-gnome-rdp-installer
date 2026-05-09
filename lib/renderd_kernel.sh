@@ -84,15 +84,34 @@ renderd_modules_built_for_current_kernel() {
   [ -f "$d/vgem.ko" ] && [ -f "$d/vkms.ko" ]
 }
 
-# 0 = vkms-backed /dev/dri/card1 already exposed, 1 = not.
+# 0 = a vkms-backed /dev/dri/card* is exposed, 1 = not.
 # Microsoft's stock kernel ships vgem.ko on recent versions, so
 # `renderd_active` (renderD128) being true is no longer enough to
 # conclude "we have nothing to do" — vkms is the actually-missing piece.
+#
+# Scan all card minors instead of hardcoding card1: WSL's stock vgem.ko
+# registers both a render node AND a primary card. When vgem loads first
+# (already loaded by the time the installer runs, or first in the
+# modprobe pair), it grabs card1 and vkms ends up on card0. Order is
+# not guaranteed, so we check every card.
 renderd_vkms_active() {
-  [ -e /dev/dri/card1 ] || return 1
-  local link
-  link=$(readlink /sys/class/drm/card1 2>/dev/null) || return 1
-  [[ $link == */vkms/* ]]
+  [ -n "$(_renderd_vkms_card)" ]
+}
+
+# Echo the basename of the vkms-backed card (e.g. "card0"), or empty if
+# none. Used both by renderd_vkms_active() and the success ui_detail.
+_renderd_vkms_card() {
+  local c link name
+  for c in /dev/dri/card*; do
+    [ -e "$c" ] || continue
+    name=$(basename "$c")
+    link=$(readlink "/sys/class/drm/$name" 2>/dev/null) || continue
+    if [[ $link == */vkms/* ]]; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+  done
+  return 1
 }
 
 # Strong sanity check on a candidate .ko before we install it:
@@ -191,7 +210,7 @@ renderd_clone_or_refresh_source() {
 }
 
 # Apply our overlay on top of Microsoft's WSL config:
-#   CONFIG_DRM_VKMS=m  — virtual KMS (/dev/dri/card1)
+#   CONFIG_DRM_VKMS=m  — virtual KMS (/dev/dri/card*)
 #   CONFIG_DRM_VGEM=m  — virtual GEM render node (/dev/dri/renderD128).
 #                        Already shipped =m by Microsoft on recent kernels
 #                        (6.6.114.1+); kept here so older kernels still
@@ -423,9 +442,9 @@ install_renderd_kernel() {
 
   ui_step "renderd modules"
 
-  # Short-path: BOTH /dev/dri/renderD128 (vgem) and /dev/dri/card1 (vkms)
-  # already there, AND our .ko's are present in extra/ for the running
-  # kernel. Nothing to do — unless FORCE is set.
+  # Short-path: BOTH renderD128 (vgem) and a vkms-backed card already
+  # there, AND our .ko's are present in extra/ for the running kernel.
+  # Nothing to do — unless FORCE is set.
   if renderd_active && renderd_vkms_active \
      && renderd_modules_built_for_current_kernel \
      && [ "${INSTALL_RENDERD_FORCE:-0}" != "1" ]; then
@@ -435,7 +454,7 @@ install_renderd_kernel() {
   fi
 
   # Pre-existing custom-kernel install (VGEM=y in vmlinux) — vermagic
-  # has '+', our prebuilts can't match, and there's no card1 path here
+  # has '+', our prebuilts can't match, and there's no vkms card here
   # since the user's kernel was rebuilt before we shipped vkms support.
   # Don't touch.
   if renderd_active && ! renderd_user_opted_in \
@@ -456,7 +475,7 @@ install_renderd_kernel() {
     ui_warn "Kernel bumped to $(uname -r) — fetching/building modules to match"
   fi
   if renderd_active && ! renderd_vkms_active; then
-    ui_detail "stock kernel ships vgem (renderD128 present); installing our vkms for /dev/dri/card1"
+    ui_detail "stock kernel ships vgem (renderD128 present); installing our vkms for /dev/dri/card*"
   fi
 
   # Try the prebuilt path first (5–10s download vs. 60–90s local build).
@@ -485,9 +504,11 @@ install_renderd_kernel() {
 
   if renderd_active && renderd_vkms_active; then
     ui_ok "vgem + vkms ready"
-    ui_detail "/dev/dri/renderD128 (vgem) + /dev/dri/card1 (vkms)"
+    local vkms_card
+    vkms_card=$(_renderd_vkms_card 2>/dev/null || echo card?)
+    ui_detail "/dev/dri/renderD128 (vgem) + /dev/dri/$vkms_card (vkms)"
   elif renderd_active; then
-    ui_warn "vgem loaded but vkms didn't — /dev/dri/card1 missing"
+    ui_warn "vgem loaded but vkms didn't — no /dev/dri/card* backed by vkms"
     ui_detail "check: ls /dev/dri/  &&  sudo dmesg | tail"
   else
     ui_warn "modprobe completed but /dev/dri/renderD128 not present yet"

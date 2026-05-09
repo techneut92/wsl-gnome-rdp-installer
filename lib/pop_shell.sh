@@ -66,13 +66,46 @@ install_pop_shell() {
   # ~/.local/share/gnome-shell/extensions/) → configure (dconf writes) →
   # restart-shell (no-op on Wayland) → enable.
   #
-  # The trailing `gnome-extensions enable` will FAIL when gnome-shell was
-  # already running before this step (it doesn't auto-rescan the extensions
-  # dir). ui_spin returns the command's exit code; we want to keep going
-  # regardless because we recover below by bouncing gnome-shell. Wrap in
-  # `|| true` so a non-zero exit doesn't abort install.sh under set -e.
-  ui_spin "Build + local-install" \
-    make -C "$POP_SHELL_SRC" local-install || true
+  # The trailing `gnome-extensions enable` ALWAYS fails on first install
+  # under Wayland — gnome-shell can't be restarted without dropping the
+  # session, so it never rescans the extensions dir, and `enable` 5xxs
+  # against an "extension does not exist" error. The recovery path below
+  # (restart gnome-shell-headless, then enable explicitly) handles it.
+  #
+  # We can't use ui_spin around make: it'd render ✗ on the expected
+  # partial failure. Instead, manage the spinner ourselves and downgrade
+  # to ⚠ (with the recovery hint) when the post-install check shows the
+  # extension files were staged successfully — a real make failure
+  # (no metadata.json) still renders ✗.
+  ui_step "Build + local-install"
+  local make_log; make_log=$(mktemp)
+  local make_rc=0
+  make -C "$POP_SHELL_SRC" local-install >"$make_log" 2>&1 &
+  local make_pid=$!
+  local i=0 char
+  while kill -0 "$make_pid" 2>/dev/null; do
+    char="${_UI_SPIN_CHARS:$i:1}"
+    printf '\r  %s%s%s Build + local-install\033[K' \
+      "$UI_BOLD$UI_BLUE" "$char" "$UI_RESET" >/dev/tty 2>/dev/null || break
+    i=$(( (i + 1) % ${#_UI_SPIN_CHARS} ))
+    sleep 0.1
+  done
+  wait "$make_pid" || make_rc=$?
+
+  local meta="$HOME/.local/share/gnome-shell/extensions/$POP_SHELL_UUID/metadata.json"
+  if [ "$make_rc" -eq 0 ]; then
+    printf '\r  %s✓%s Build + local-install\033[K\n' "$UI_GREEN" "$UI_RESET"
+  elif [ -f "$meta" ]; then
+    printf '\r  %s⚠%s Build + local-install\033[K\n' "$UI_YELLOW" "$UI_RESET"
+    ui_detail "extension files staged; trailing 'gnome-extensions enable'"
+    ui_detail "failed (expected on Wayland) — recovery follows"
+  else
+    printf '\r  %s✗%s Build + local-install\033[K\n' "$UI_RED" "$UI_RESET"
+    tail -10 "$make_log" 2>/dev/null | sed 's/^/    /' >&2
+    rm -f "$make_log"
+    return 1
+  fi
+  rm -f "$make_log"
 
   # Bounce gnome-shell so it rescans the extensions dir and registers Pop
   # Shell. grd's Requires=gnome-shell-headless means systemd will stop grd

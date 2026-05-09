@@ -58,18 +58,20 @@ _prompt_credentials() {
 }
 
 _prompt_components() {
-  # Pre-check defaults: anything currently set to 0 (e.g. via -m or env)
-  # starts unchecked; everything else starts checked. Custom kernel
-  # defaults to OFF since most users won't want it.
+  # Pre-check defaults: everything starts checked unless explicitly
+  # overridden (-m flag or `INSTALL_X=0` env). Custom-kernel modules
+  # default ON now too — they're cheap (5–10s prebuilt download from
+  # github.com/techneut92/wsl-renderd-modules) and they fix dma-buf
+  # screen capture / Wayland gating in PipeWire/OBS/Firefox/etc. Users
+  # who don't want them just uncheck the box.
   local desktop_state=ON   firefox_state=ON   onlyoffice_state=ON
-  local pop_state=ON       renderd_state=OFF
+  local pop_state=ON       renderd_state=ON
   [ "${INSTALL_DESKTOP:-1}"    = "0" ] && desktop_state=OFF
   [ "${INSTALL_FIREFOX:-1}"    = "0" ] && firefox_state=OFF
   [ "${INSTALL_ONLYOFFICE:-1}" = "0" ] && onlyoffice_state=OFF
   [ "${INSTALL_POP_SHELL:-1}"  = "0" ] && pop_state=OFF
   case "${INSTALL_RENDERD:-}" in
-    1|yes|true)        renderd_state=ON ;;
-    0|no|false|skip)   renderd_state=OFF ;;
+    0|no|false|skip)  renderd_state=OFF ;;
   esac
 
   local choices

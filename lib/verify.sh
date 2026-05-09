@@ -20,6 +20,17 @@ verify_and_print_summary() {
              | grep -iE 'surfaceless renderer|GL renderer|OpenGL renderer' \
              | tail -1 || true)
 
+  # Two parameter expansions concatenated would EMIT THE PASSWORD if
+  # RDP_PASSWORD was set — `${var:+REPLACE}${var:-DEFAULT}` resolves to
+  # `REPLACE` + `<value>`, not the XOR the original author meant.
+  # Compute a single status string here.
+  local pw_status
+  if [ -n "$RDP_PASSWORD" ]; then
+    pw_status="(the one you provided)"
+  else
+    pw_status="(unchanged from previous run)"
+  fi
+
   if [ "$SHELL_OK" != "active" ] || [ "$GRD_OK" != "active" ] || [ "$LISTEN" -lt 1 ]; then
     warn "Setup didn't come up cleanly:"
     warn "  gnome-shell-headless: $SHELL_OK"
@@ -46,7 +57,7 @@ verify_and_print_summary() {
 
   RDP credentials:
     Username:  ${RDP_USERNAME:-(unchanged from previous run)}
-    Password:  ${RDP_PASSWORD:+(the one you provided)}${RDP_PASSWORD:-(unchanged from previous run)}
+    Password:  $pw_status
 
   Service control:
     systemctl --user {status,restart,stop} gnome-shell-headless.service

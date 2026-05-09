@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# extras/renderd/verify.sh — post-`wsl --shutdown` verification for the
-# opt-in custom kernel installed by lib/renderd_kernel.sh.
+# extras/renderd/verify.sh — sanity check for the renderd modules
+# installed by lib/renderd_kernel.sh.
 #
-# Run this after `wsl --shutdown` + re-launch. It checks four things and
-# prints PASS/FAIL for each, with hints when something didn't take.
+# Modules-only architecture: we drop vgem.ko + vkms.ko under
+# /lib/modules/$(uname -r)/extra/ and persist them via
+# /etc/modules-load.d/wsl-renderd.conf. No `wsl --shutdown` required —
+# `modprobe` loads them immediately during install. This script reports
+# PASS/FAIL on each artifact so post-install issues are easy to triage.
 
 set -uo pipefail
 
@@ -25,47 +28,49 @@ check() {
   fi
 }
 
-printf '\n  %sCustom kernel verification%s\n\n' "$C_YELLOW" "$C_RESET"
+printf '\n  %srenderd modules verification%s\n\n' "$C_YELLOW" "$C_RESET"
 
-# 1. VGEM is the backing driver for renderD128. We use the world-readable
-# sysfs symlink (target contains "/vgem/") rather than dmesg, which on
-# Fedora 44 and most modern distros requires CAP_SYSLOG.
+KREL=$(uname -r)
+MODDIR="/lib/modules/$KREL/extra"
+
+# 1. .ko files installed for the running kernel.
+if [ -f "$MODDIR/vgem.ko" ] && [ -f "$MODDIR/vkms.ko" ]; then
+  check "vgem.ko + vkms.ko installed at $MODDIR" ok
+else
+  missing=()
+  [ -f "$MODDIR/vgem.ko" ] || missing+=("vgem.ko")
+  [ -f "$MODDIR/vkms.ko" ] || missing+=("vkms.ko")
+  check "vgem.ko + vkms.ko installed for $KREL" fail \
+        "Missing under $MODDIR: ${missing[*]}. Re-run wsl-rdp-gnome-renew (modules might not have been built for this kernel version)."
+fi
+
+# 2. modprobe persistence file.
+if [ -f /etc/modules-load.d/wsl-renderd.conf ]; then
+  check "/etc/modules-load.d/wsl-renderd.conf in place" ok
+else
+  check "/etc/modules-load.d/wsl-renderd.conf in place" fail \
+        "Without it, modules don't load at boot. Re-run wsl-rdp-gnome-renew."
+fi
+
+# 3. VGEM is the backing driver for renderD128 (sysfs check — works
+# regardless of whether vgem is built-in or a loaded module).
 if [ -e /sys/class/drm/renderD128 ] \
    && [[ $(readlink /sys/class/drm/renderD128 2>/dev/null) == */vgem/* ]]; then
   check "VGEM is the backing driver for renderD128" ok
 else
   check "VGEM is the backing driver for renderD128" fail \
-        "Either WSL didn't pick up the new kernel (forgot \`wsl --shutdown\`?), the build is missing CONFIG_DRM_VGEM, or another driver took the slot. Check \`readlink /sys/class/drm/renderD128\` — should contain '/vgem/'."
+        "Either modprobe failed (try \`sudo modprobe vgem\` and check \`sudo dmesg | tail\`), or another driver took the slot."
 fi
 
-# 2. Render node device file.
+# 4. /dev/dri/renderD128 exists.
 if [ -e /dev/dri/renderD128 ]; then
   check "/dev/dri/renderD128 exists" ok
 else
   check "/dev/dri/renderD128 exists" fail \
-        "Render node missing. Try \`ls /dev/dri/\` — if only card0 is there, VGEM is in the kernel but didn't auto-create the render node; try \`sudo modprobe vgem\` and re-check."
+        "Render node missing. Try \`ls /dev/dri/\` — if only card0 is there, VGEM didn't create the render node; try \`sudo modprobe vgem\` and re-check."
 fi
 
-# 3. .wslconfig points at our staged kernel.
-if command -v wslpath >/dev/null && command -v cmd.exe >/dev/null; then
-  win_home=$(cd / && cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r\n')
-  if [ -n "$win_home" ]; then
-    wslconfig=$(wslpath -u "$win_home")/.wslconfig
-    expected=$(wslpath -u "$win_home")/.wsl-kernel/bzImage
-    if [ -f "$wslconfig" ] && grep -qi 'kernel=.*\\.wsl-kernel\\\\bzImage' "$wslconfig"; then
-      check ".wslconfig sets kernel= to .wsl-kernel\\bzImage" ok
-    else
-      check ".wslconfig sets kernel=" fail \
-            "Expected $(wslpath -w "$expected" 2>/dev/null) in $(wslpath -w "$wslconfig" 2>/dev/null). Re-run install.sh."
-    fi
-  else
-    check ".wslconfig sets kernel=" fail "couldn't resolve %USERPROFILE%"
-  fi
-else
-  check ".wslconfig sets kernel=" fail "wslpath/cmd.exe missing — not WSL?"
-fi
-
-# 4. User in video and render groups.
+# 5. User in video and render groups.
 groups_now=$(id -nG "$USER")
 in_video=0; in_render=0
 echo "$groups_now" | tr ' ' '\n' | grep -qx video  && in_video=1
@@ -77,7 +82,7 @@ else
   [ $in_video -eq 0 ]  && missing+=("video")
   [ $in_render -eq 0 ] && missing+=("render")
   check "$USER is in 'video' and 'render' groups" fail \
-        "Missing: ${missing[*]}. The installer ran usermod, but group changes only take effect on a fresh login. Try \`exec su - $USER\` or another \`wsl --shutdown\`."
+        "Missing: ${missing[*]}. The installer ran usermod, but group changes only take effect on a fresh login. Try \`exec su - $USER\` or \`wsl --shutdown\` + re-enter."
 fi
 
 printf '\n'

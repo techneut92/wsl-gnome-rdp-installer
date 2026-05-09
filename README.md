@@ -123,11 +123,13 @@ Set any `INSTALL_*` env var to `0`/`1` and the matching component box in the upf
 
 ---
 
-## Optional: custom kernel for `/dev/dri/renderD128`
+## Render node modules (`/dev/dri/renderD128`)
 
-The component checklist at the start of the run includes a "Custom kernel for `/dev/dri/renderD128`" box. It's pre-unchecked by default — tick it to opt in, or pre-set `INSTALL_RENDERD=1` to have it pre-checked. The build runs LAST in the pipeline so even if it fails, the rest of the desktop already came up.
+The component checklist defaults the **"Custom kernel for /dev/dri/renderD128"** box to ON. Microsoft's stock WSL kernel ships `CONFIG_DRM=y` but no `VGEM`/`VKMS`, so apps that gate features on a DRM render node existing silently disable themselves. We fix that by `modprobe`'ing two out-of-tree modules — no `.wslconfig` change, no kernel pin, no `wsl --shutdown` required.
 
-**Why you might want it.** Microsoft's stock WSL kernel ships no DRM device at all, so any Linux app that gates a feature on a render node existing silently disables that feature. Adding VGEM unblocks:
+**Modules come from the [wsl-renderd-modules](https://github.com/techneut92/wsl-renderd-modules) companion repo,** which builds them in CI against each Microsoft WSL kernel tag and publishes the result as a GitHub Release. The installer picks the matching tarball, verifies vermagic, and drops the .ko's into `/lib/modules/$(uname -r)/extra/`. A 5-second download, end-to-end. If the prebuilt isn't available (offline / no matching artifact yet / you're on a custom kernel with `+` in `uname -r`), the installer falls back to a local source build (~60–90s).
+
+**Why you might want it.**
 
 - **PipeWire dma-buf screen capture** — `xdg-desktop-portal-gnome` screencast, OBS Studio's PipeWire source, browser screen-share via PipeWire.
 - **EGL device-platform consumers** — gstreamer's GL pipeline, ffmpeg's `egl` source, headless rendering test harnesses.
@@ -136,35 +138,29 @@ The component checklist at the start of the run includes a "Custom kernel for `/
 
 **What it does NOT do.**
 
-- Does **not** add real GPU acceleration. VGEM is a virtual driver — apps still render via llvmpipe (CPU). It only unblocks codepaths that disable themselves when no render node exists.
-- Does **not** fix the chroma watermark in the RDP video stream. That's a separate problem in `gnome-remote-desktop`'s EGL gate that the kernel rebuild alone doesn't unlock; see the comment block in `lib/renderd_kernel.sh` for the three-layer analysis.
-- Does **not** help apps that already work via WSLg's relay (those use Microsoft's own dma-buf path through `/mnt/wslg/`).
+- **Not GPU acceleration.** VGEM is a virtual driver — apps using it still render via llvmpipe (CPU). It only unblocks codepaths that disable themselves when no render node exists.
+- **Doesn't fix the chroma watermark in the RDP video stream.** That's a separate problem in `gnome-remote-desktop`'s EGL gate that the modules don't address; see the comment block in `lib/renderd_kernel.sh` for the three-layer analysis.
+- **Doesn't help apps that already work via WSLg's relay** (those use Microsoft's own dma-buf path through `/mnt/wslg/`).
 
-**Cost.**
+### Auto-update on kernel bump
 
-- 5–10 min build time (uses up to 8 cores).
-- ~500 MB of build dependencies (`gcc`, `make`, `bison`, `flex`, `libelf-dev`, etc.) installed temporarily.
-- Requires `wsl --shutdown` from Windows to apply.
-- Reversible: your `.wslconfig` is backed up to `.wslconfig.before-wsl-gnome-rdp` before being modified, and any pre-existing `bzImage` is preserved as `bzImage.before-wsl-gnome-rdp`.
+When Microsoft pushes a new WSL kernel via the Microsoft Store, `uname -r` changes and the previously-installed modules' vermagic stops matching — `modprobe` rejects the load, `/dev/dri/renderD128` quietly disappears. Next time you run `wsl-rdp-gnome-renew`, the installer detects this (modules-load.d marker exists, but no .ko's for current `uname -r`) and silently re-fetches the prebuilt for the new kernel.
 
-**After installing**, run `wsl --shutdown` from a Windows shell, re-launch the distro, and verify with:
+### Knobs
+
+- `INSTALL_RENDERD=0` — uncheck the box pre-emptively; if previously installed, the installer cleanly removes the modules + persistence file.
+- `INSTALL_RENDERD_FORCE=1` — force a re-fetch/rebuild even if everything looks current.
+- `RENDERD_LOCAL_BUILD=1` — skip the prebuilt download, always build from source locally (useful when forking / inspecting).
+- `RENDERD_PREBUILT_URL_BASE=…` — point at a different release host (self-hosting, fork mirror).
+- `RENDERD_TAG=…` — override the kernel tag to fetch (default is derived from `uname -r`).
+
+Verify any time with:
 
 ```bash
 ./extras/renderd/verify.sh
 ```
 
-which prints PASS/FAIL for each of: VGEM is the active driver, `/dev/dri/renderD128` exists, `.wslconfig` points at the new kernel, your user is in the `video` and `render` groups.
-
-### Custom-kernel maintenance
-
-Once you opt in, your `.wslconfig` pins the distro to the bzImage we built. **Microsoft's WSL kernel updates stop reaching that distro** — you'll keep running the version we built until you rebuild.
-
-`install_renderd_kernel` checks Microsoft's `linux-msft-wsl-*` tag list at the start of every run and prints an advisory line — either:
-
-- `WSL kernel: 6.18.26.1 (latest from Microsoft)` — you're current, or
-- `⚠ Newer WSL kernel tag available: 6.18.26.1 → 6.20.x.y` — Microsoft has tagged something newer; rebuild with `INSTALL_RENDERD=1 INSTALL_RENDERD_FORCE=1 wsl-rdp-gnome-renew` to pick it up. Costs another ~10 min build.
-
-Skipping the rebuild is fine — your existing custom bzImage keeps working — but you're voluntarily off Microsoft's WSL kernel update train.
+Prints PASS/FAIL for: .ko files present for current kernel, modules-load.d persistence, VGEM is the backing driver, `/dev/dri/renderD128` exists, user is in `video` + `render` groups.
 
 ---
 

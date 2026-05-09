@@ -52,83 +52,6 @@ install_user_environment() {
       XDG_SESSION_TYPE=wayland
 }
 
-install_wslg_flatpak_sync() {
-  # Generalises the old per-app expose_user_flatpaks_to_wslg into a
-  # background watcher: any flatpak install/uninstall/update modifies
-  # ~/.local/share/flatpak/exports/share/applications/, which trips a
-  # systemd .path unit, which kicks a oneshot service that calls
-  # `sudo /usr/local/bin/wsl-flatpak-wslg-sync $USER` to mirror
-  # .desktop + icons into /usr/share so WSLg's Start-Menu publisher
-  # picks them up. Sudoers drop-in scopes NOPASSWD to the one binary.
-  ui_step "WSLg flatpak auto-publish"
-  ui_spin "Install /usr/local/bin/wsl-flatpak-wslg-sync" \
-    sudo install -m 755 \
-      "$PROJECT_ROOT/extras/wslg-flatpak-sync/wsl-flatpak-wslg-sync" \
-      /usr/local/bin/wsl-flatpak-wslg-sync
-  ui_spin "Install /etc/sudoers.d/wsl-flatpak-wslg-sync" \
-    sudo install -m 440 \
-      "$PROJECT_ROOT/extras/wslg-flatpak-sync/sudoers.wsl-flatpak-wslg-sync" \
-      /etc/sudoers.d/wsl-flatpak-wslg-sync
-
-  install -d -m 755 "$SYSTEMD_USER_DIR"
-  install -m 644 \
-    "$PROJECT_ROOT/units/wsl-flatpak-wslg-sync.path" \
-    "$SYSTEMD_USER_DIR/wsl-flatpak-wslg-sync.path"
-  install -m 644 \
-    "$PROJECT_ROOT/units/wsl-flatpak-wslg-sync.service" \
-    "$SYSTEMD_USER_DIR/wsl-flatpak-wslg-sync.service"
-
-  systemctl --user daemon-reload
-  ui_spin "Enable wsl-flatpak-wslg-sync.path" \
-    systemctl --user enable --now wsl-flatpak-wslg-sync.path
-
-  # Initial run — covers any flatpak that was installed before the
-  # path unit was wired up (Firefox + ONLYOFFICE from this same
-  # install.sh, or anything pre-existing on a re-run).
-  local manifest=/var/lib/wsl-flatpak-wslg-sync/$USER.list
-  local before=0
-  [ -s "$manifest" ] && before=$(sudo wc -l < "$manifest" 2>/dev/null || echo 0)
-  ui_spin "Initial flatpak → /usr/share sync" \
-    sudo /usr/local/bin/wsl-flatpak-wslg-sync "$USER"
-  local after=0
-  [ -s "$manifest" ] && after=$(sudo wc -l < "$manifest" 2>/dev/null || echo 0)
-  # Newly published entries → "wsl -t" hint in verify summary, since
-  # WSLg only walks /usr/share at distro startup.
-  if [ "$after" -gt "$before" ]; then
-    export FLATPAKS_NEWLY_LINKED=1
-  fi
-}
-
-install_theme_sync() {
-  # Mirror Windows' light/dark theme into GNOME via a periodic poll.
-  # WSLg doesn't propagate Windows theme to Linux apps, so without
-  # this a fresh GNOME session always comes up in light theme even
-  # when Windows is in dark mode. The .timer fires the script every
-  # minute (and 5s after session start so first match is fast); the
-  # script reads HKCU\...\AppsUseLightTheme via reg.exe and runs
-  # gsettings to update org.gnome.desktop.interface.{color-scheme,
-  # gtk-theme}. Apps that gate on the XDG color-scheme portal (Firefox
-  # via toolkit, GNOME apps via libadwaita) follow within a couple of
-  # frames; non-portal-aware apps need a relaunch.
-  ui_step "Theme sync (Windows ↔ GNOME)"
-  ui_spin "Install /usr/local/bin/wsl-theme-sync" \
-    sudo install -m 755 \
-      "$PROJECT_ROOT/extras/wsl-theme-sync/wsl-theme-sync" \
-      /usr/local/bin/wsl-theme-sync
-
-  install -d -m 755 "$SYSTEMD_USER_DIR"
-  install -m 644 \
-    "$PROJECT_ROOT/units/wsl-theme-sync.service" \
-    "$SYSTEMD_USER_DIR/wsl-theme-sync.service"
-  install -m 644 \
-    "$PROJECT_ROOT/units/wsl-theme-sync.timer" \
-    "$SYSTEMD_USER_DIR/wsl-theme-sync.timer"
-
-  systemctl --user daemon-reload
-  ui_spin "Enable wsl-theme-sync.timer" \
-    systemctl --user enable --now wsl-theme-sync.timer
-}
-
 install_xdg_user_dirs() {
   # Standard ~/Downloads, ~/Documents, ~/Pictures, ~/Music, ~/Videos,
   # ~/Desktop, ~/Templates, ~/Public. On a normal GNOME box these are
@@ -193,37 +116,6 @@ enable_appindicator_extension() {
   fi
   ui_ok "Enable AppIndicator"
   ui_detail "takes effect on next gnome-shell start"
-}
-
-# WSL2's /init normally registers a binfmt_misc entry for "WSLInterop"
-# at boot — that's what dispatches PE/EXE files (`wsl.exe`, `cmd.exe`,
-# `powershell.exe`, every Windows-side .exe) to the /init interpreter
-# so they actually run. The registration occasionally drops after a
-# `wsl --shutdown` + relaunch cycle, leaving every .exe call failing
-# with "cannot execute binary file: Exec format error". We work around
-# it by dropping a /etc/binfmt.d/WSLInterop.conf so that
-# systemd-binfmt.service re-registers it from a known-good rule on
-# every boot — independent of whatever /init may or may not do.
-#
-# Idempotent: re-runs no-op if the file is already byte-identical.
-install_wslinterop_binfmt() {
-  ui_step "WSLInterop binfmt_misc"
-  local target=/etc/binfmt.d/WSLInterop.conf
-  local src="$PROJECT_ROOT/units/WSLInterop.conf"
-  if [ -f "$target" ] && cmp -s "$src" "$target"; then
-    ui_skip "$target already in place"
-    return 0
-  fi
-  ui_spin "Install $target" \
-    sudo install -D -m 644 "$src" "$target"
-  # If the registration is missing right now, kick systemd-binfmt
-  # so the current session gets it without waiting for a reboot.
-  if [ ! -e /proc/sys/fs/binfmt_misc/WSLInterop ]; then
-    ui_spin "Register WSLInterop in this session" \
-      sudo systemctl restart systemd-binfmt.service
-  else
-    ui_skip "WSLInterop already registered for this session"
-  fi
 }
 
 install_x11_unix_fix() {

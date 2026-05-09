@@ -69,71 +69,18 @@ install_packages() {
 # and apps are present.
 install_flatpak_apps() {
   ui_step "Flatpak desktop apps"
-
-  # Initialize the SYSTEM flatpak installation too — even though we
-  # install our apps per-user. Without /var/lib/flatpak/repo on disk,
-  # bare `flatpak run <appid>` (which is what every flatpak .desktop
-  # file's Exec= line resolves to) fails with `error: While opening
-  # repository /var/lib/flatpak/repo: opening repo: opendir(...) No
-  # such file or directory` and the launch exits 1. This breaks
-  # gnome-shell-launched flatpaks (the dash doesn't pass --user; the
-  # .desktop file doesn't either). Adding a remote with --if-not-exists
-  # initializes the repo as a side-effect — empty is fine, our apps
-  # still resolve from the user installation.
-  ui_spin "Add flathub remote (--system, init repo)" \
-    sudo flatpak remote-add --system --if-not-exists \
-      flathub https://flathub.org/repo/flathub.flatpakrepo
-
-  ui_spin "Add flathub remote (--user)" \
-    flatpak remote-add --user --if-not-exists \
-      flathub https://flathub.org/repo/flathub.flatpakrepo
-
-  # Global flatpak override: deny host /tmp to every user flatpak.
-  # On WSLg, /tmp/.X11-unix is a symlink to /mnt/wslg/.X11-unix (Microsoft's
-  # X server socket dir). Any flatpak whose manifest declares
-  # `filesystems=/tmp` causes bwrap to bind-mount the host /tmp into the
-  # sandbox and then attempt a tmpfs mount on /tmp/.X11-unix to stage the
-  # X11 socket area. The symlink target /mnt/wslg/ isn't bound into the
-  # sandbox, so bwrap fails with `Can't mount tmpfs on /newroot/tmp/.X11-unix:
-  # No such file or directory` and the app exits before main(). Confirmed
-  # affected: org.onlyoffice.desktopeditors. The trigger is the /tmp
-  # filesystem permission, not the x11 socket — many seemingly-Wayland-only
-  # apps still ship with `filesystems=/tmp` for IPC. Setting this globally
-  # (no APP-ID) means any future flatpak inherits the deny and just works;
-  # apps that genuinely need /tmp would already have been broken on WSLg.
-  # `flatpak override` is idempotent — re-runs are no-ops.
-  ui_spin "Override flatpak sandbox: --nofilesystem=/tmp" \
-    flatpak override --user --nofilesystem=/tmp
-
-  # Pin XCURSOR_SIZE for every flatpak (no app id = global override).
-  # Wayland-native flatpaks (Firefox) ignore this — mutter renders the
-  # cursor for them. Xwayland-via-flatpak ones (CEF apps like
-  # ONLYOFFICE Desktop Editors, Electron-X11, Java AWT) read XCURSOR_SIZE
-  # from env and end up with a ~4x cursor when mutter scales it for a
-  # HiDPI RDP client. Pinning to 24 (GNOME's default cursor-size)
-  # short-circuits that. Idempotent.
-  ui_spin "Override flatpak XCURSOR_SIZE=24 (global)" \
-    flatpak override --user --env=XCURSOR_SIZE=24
-
+  # All flatpak base wiring (flathub --system + --user remotes,
+  # global --nofilesystem=/tmp override, global XCURSOR_SIZE=24 pin)
+  # is owned by wsl-qol's setup_flatpak_remotes and runs earlier
+  # in the pipeline via bootstrap_wsl_qol. By the time we get here
+  # the remotes are in place and the wsl-flatpak-wslg-sync.path unit
+  # is watching the exports dir — the install below will trip it.
   ui_spin "Install Firefox + ONLYOFFICE flatpaks" \
     flatpak install --user --noninteractive --assumeyes \
       flathub \
       org.mozilla.firefox \
       org.onlyoffice.desktopeditors
-
-  # The wsl-flatpak-wslg-sync.path unit (installed by
-  # install_wslg_flatpak_sync earlier in the pipeline) is already
-  # watching the flatpak exports dir; the install above tripped it
-  # and the sync ran in the background. Nothing to do here.
 }
-
-# Earlier versions of this file shipped expose_user_flatpaks_to_wslg
-# here. It was a one-shot copy of two specific apps' .desktop+icon files
-# into /usr/share, run from the install pipeline. Replaced by
-# install_wslg_flatpak_sync (lib/configure.sh) which installs a
-# generalised root-side sync script + a per-user systemd path-unit
-# watcher, so any flatpak install/uninstall/update auto-publishes to
-# the Start Menu without re-running this installer.
 
 # Install the standard GNOME desktop app suite (Files/Nautilus, terminal,
 # text editor, calculator, system monitor, etc.). The minimal install_packages

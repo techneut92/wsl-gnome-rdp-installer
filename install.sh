@@ -83,6 +83,8 @@ export PROJECT_ROOT
 . "$PROJECT_ROOT/lib/pop_shell.sh"
 # shellcheck source=lib/renderd_kernel.sh
 . "$PROJECT_ROOT/lib/renderd_kernel.sh"
+# shellcheck source=lib/qol_bootstrap.sh
+. "$PROJECT_ROOT/lib/qol_bootstrap.sh"
 # shellcheck source=lib/prompt.sh
 . "$PROJECT_ROOT/lib/prompt.sh"
 
@@ -258,14 +260,15 @@ precheck_user_at_service           # installs drop-in + start probe
 # INSTALL_POP_SHELL, INSTALL_APPINDICATOR, INSTALL_RENDERD.
 prompt_all_settings
 
+# Run wsl-qol first — owns the desktop-agnostic fixes (binfmt drop-in,
+# flatpak Start-Menu auto-publish, theme sync, WSLg pulse-detach,
+# flatpak base remotes + global overrides). The .path watcher it
+# installs needs to be live before install_flatpak_apps modifies the
+# flatpak exports dir, and the /tmp deny override needs to apply
+# before ONLYOFFICE is launched the first time.
+bootstrap_wsl_qol
+
 ui_phase "Host setup"
-# WSLg .desktop sync infra goes in BEFORE install_packages — the path
-# unit needs to be live by the time install_flatpak_apps modifies the
-# flatpak exports dir, otherwise we'd miss the trigger and need a
-# manual first-run. Same for the theme-sync timer (so the very first
-# flatpak launch happens with the right colour scheme).
-install_wslg_flatpak_sync          # /usr/local/bin + sudoers + user .path/.service
-install_theme_sync                 # /usr/local/bin + user .timer/.service
 install_packages                   # uses DISTRO_FAMILY + INSTALL_DESKTOP/INSTALL_FLATPAK
 # Kernel modules (vgem+vkms) up front, alongside packages, so /dev/dri
 # is fully populated before gnome-shell-headless first starts and so
@@ -283,7 +286,6 @@ configure_grd                      # grdctl --headless settings
 install_user_environment           # ~/.config/environment.d/*.conf
 install_xdg_user_dirs              # ~/Downloads, ~/Documents, ~/Pictures, … (xdg-user-dirs-update)
 [ "${INSTALL_APPINDICATOR:-1}" = "1" ] && enable_appindicator_extension
-install_wslinterop_binfmt          # /etc/binfmt.d/WSLInterop.conf — keep .exe interop alive across shutdowns
 install_x11_unix_fix               # /etc/systemd/system/wslg-x11-unix-fix.service
 install_systemd_units              # write + enable + restart
 [ "${INSTALL_POP_SHELL:-1}" = "1" ] && install_pop_shell

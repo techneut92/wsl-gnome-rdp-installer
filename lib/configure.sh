@@ -88,6 +88,37 @@ enable_appindicator_extension() {
   ui_detail "takes effect on next gnome-shell start"
 }
 
+# WSL2's /init normally registers a binfmt_misc entry for "WSLInterop"
+# at boot — that's what dispatches PE/EXE files (`wsl.exe`, `cmd.exe`,
+# `powershell.exe`, every Windows-side .exe) to the /init interpreter
+# so they actually run. The registration occasionally drops after a
+# `wsl --shutdown` + relaunch cycle, leaving every .exe call failing
+# with "cannot execute binary file: Exec format error". We work around
+# it by dropping a /etc/binfmt.d/WSLInterop.conf so that
+# systemd-binfmt.service re-registers it from a known-good rule on
+# every boot — independent of whatever /init may or may not do.
+#
+# Idempotent: re-runs no-op if the file is already byte-identical.
+install_wslinterop_binfmt() {
+  ui_step "WSLInterop binfmt_misc"
+  local target=/etc/binfmt.d/WSLInterop.conf
+  local src="$PROJECT_ROOT/units/WSLInterop.conf"
+  if [ -f "$target" ] && cmp -s "$src" "$target"; then
+    ui_skip "$target already in place"
+    return 0
+  fi
+  ui_spin "Install $target" \
+    sudo install -D -m 644 "$src" "$target"
+  # If the registration is missing right now, kick systemd-binfmt
+  # so the current session gets it without waiting for a reboot.
+  if [ ! -e /proc/sys/fs/binfmt_misc/WSLInterop ]; then
+    ui_spin "Register WSLInterop in this session" \
+      sudo systemctl restart systemd-binfmt.service
+  else
+    ui_skip "WSLInterop already registered for this session"
+  fi
+}
+
 install_x11_unix_fix() {
   ui_step "WSLg /tmp/.X11-unix fix"
   # WSL's /init recreates /tmp/.X11-unix as a symlink to /mnt/wslg/.X11-unix

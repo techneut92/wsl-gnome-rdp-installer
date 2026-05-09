@@ -270,6 +270,7 @@ ui_phase "RDP services"
 configure_grd                      # grdctl --headless settings
 install_user_environment           # ~/.config/environment.d/*.conf
 [ "${INSTALL_APPINDICATOR:-1}" = "1" ] && enable_appindicator_extension
+install_wslinterop_binfmt          # /etc/binfmt.d/WSLInterop.conf — keep .exe interop alive across shutdowns
 install_x11_unix_fix               # /etc/systemd/system/wslg-x11-unix-fix.service
 install_systemd_units              # write + enable + restart
 

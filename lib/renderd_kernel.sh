@@ -390,9 +390,17 @@ renderd_local_build() {
 
 # Persist module loading across boots. systemd-modules-load.service
 # reads /etc/modules-load.d/*.conf at boot and modprobes each name.
+# Idempotent: skip the write if the file already has the right content,
+# so repeated install.sh runs (and the short-path) stay quiet.
 renderd_persist_load() {
+  local want='vgem
+vkms'
+  if [ -f "$RENDERD_LOAD_FILE" ] && [ "$(cat "$RENDERD_LOAD_FILE")" = "$want" ]; then
+    ui_skip "$RENDERD_LOAD_FILE already in place"
+    return 0
+  fi
   sudo install -d -m 755 /etc/modules-load.d
-  printf 'vgem\nvkms\n' | sudo tee "$RENDERD_LOAD_FILE" >/dev/null
+  printf '%s\n' "$want" | sudo tee "$RENDERD_LOAD_FILE" >/dev/null
   ui_ok "Persist modprobe at boot"
   ui_detail "$RENDERD_LOAD_FILE"
 }
@@ -471,6 +479,10 @@ install_renderd_kernel() {
      && renderd_modules_built_for_current_kernel \
      && [ "${INSTALL_RENDERD_FORCE:-0}" != "1" ]; then
     ui_skip "vgem + vkms current and active for $(uname -r)"
+    # Make sure the modules-load.d entry is in place even when the
+    # rest of the install path is skipped — without it modprobe at
+    # next cold boot won't auto-load the modules.
+    renderd_persist_load
     renderd_add_user_groups
     return 0
   fi

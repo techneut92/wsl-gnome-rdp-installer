@@ -205,6 +205,7 @@ lib/
   ui.sh                                        colors, headers, ui_spin
   common.sh                                    log/distro detection
   prompt.sh                                    upfront credential + component prompts (whiptail)
+  qol_bootstrap.sh                             clone + run github.com/techneut92/wsl-qol
   packages.sh                                  dnf/apt packages, flatpaks
   cgroup_collision.sh                          multi-distro detect + UID renumber
   dbus.sh                                      systemd 259 drop-in + user-bus bootstrap
@@ -219,9 +220,20 @@ extras/
 units/
   gnome-shell-headless.service                 user unit
   gnome-remote-desktop-headless.override.conf  software-EGL override for grd
-  wslg-pulse-detach.service                    WSLg/renumber pulse fix
+  wslg-x11-unix-fix.service                    sticky-bit fix for self-spawned Xwayland
 environment.d/
   10-wsl-gpu.conf                              GALLIUM_DRIVER=d3d12 for client apps
   20-gnome-session.conf                        XDG_CURRENT_DESKTOP / SESSION_TYPE
+  30-rdp-display.conf                          GDK_BACKEND=wayland (route to wayland-grd)
+  40-cursor.conf                               XCURSOR_SIZE=24 for native Xwayland clients
 ```
+
+## Tested on
+
+| Distro              | WSL version | Notes                          |
+| ------------------- | ----------- | ------------------------------ |
+| Fedora Linux 44     | 2.7.3.0     | Primary development target.    |
+
+If you've run this on a different distro/WSL combination and it
+worked (or didn't), open a PR/issue extending this table.
 

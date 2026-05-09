@@ -101,6 +101,7 @@ configure_grd                      # grdctl --headless settings
 install_user_environment           # ~/.config/environment.d/*.conf
 enable_appindicator_extension      # tray support for jetbrains-toolbox & friends
 configure_wallpaper                # bypass Fedora's missing JXL pixbuf loader
+install_x11_unix_fix               # /etc/systemd/system/wslg-x11-unix-fix.service
 install_systemd_units              # write + enable + restart
 install_pop_shell                  # build + enable Pop Shell tiling extension
 verify_and_print_summary

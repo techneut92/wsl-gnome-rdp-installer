@@ -100,6 +100,28 @@ configure_wallpaper() {
   gsettings set org.gnome.desktop.background picture-uri-dark "$dark"
 }
 
+install_x11_unix_fix() {
+  # WSL's /init recreates /tmp/.X11-unix as a symlink to /mnt/wslg/.X11-unix
+  # on every boot. Mutter's Xwayland refuses to start when that path is a
+  # symlink ("Directory \"/tmp/.X11-unix\" is missing the sticky bit"); on
+  # such a session gnome-shell-headless can't run --no-x11 was dropped, so
+  # we ship a system-level oneshot that replaces the symlink with a real
+  # mode-1777 directory and X0-symlinks WSLg's socket back in (so DISPLAY=:0
+  # still resolves to WSLg apps that go through Windows). Mutter then
+  # spawns its own Xwayland under :1 inside the RDP session.
+  log "Installing /etc/systemd/system/wslg-x11-unix-fix.service (system unit)…"
+  sudo install -m 644 "$PROJECT_ROOT/units/wslg-x11-unix-fix.service" \
+                       /etc/systemd/system/wslg-x11-unix-fix.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable wslg-x11-unix-fix.service >/dev/null
+  # Apply right now if the symlink is still in place from this boot (the
+  # unit's ConditionPathIsSymbolicLink= guard makes it a no-op after the
+  # first run, so re-running the installer is safe).
+  if [ -L /tmp/.X11-unix ]; then
+    sudo systemctl start wslg-x11-unix-fix.service
+  fi
+}
+
 install_systemd_units() {
   log "Writing systemd user units to $SYSTEMD_USER_DIR…"
   mkdir -p "$SYSTEMD_USER_DIR" \

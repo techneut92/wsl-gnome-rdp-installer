@@ -21,6 +21,12 @@ Type=simple
 Environment="WAYLAND_DISPLAY=wayland-grd"
 Environment="XDG_SESSION_TYPE=wayland"
 Environment="XDG_CURRENT_DESKTOP=GNOME"
+# Drop WSLg's DISPLAY=:0 so X11 apps don't fall through to Windows.
+# Mutter spawns its own Xwayland inside this RDP session and exports a
+# fresh DISPLAY (typically :1) via systemctl --user set-environment, which
+# is what we want children to inherit. WSLg's X server stays reachable
+# explicitly via DISPLAY=:0 (X0 socket is symlinked under our /tmp/.X11-unix).
+UnsetEnvironment=DISPLAY
 # Force Mesa's gallium d3d12 driver so mutter's surfaceless EGL renders on
 # the GPU (Mesa→D3D12→DXG→host driver) instead of llvmpipe. Verified:
 #   GALLIUM_DRIVER=d3d12 eglinfo -p surfaceless
@@ -34,7 +40,7 @@ Environment="XDG_CURRENT_DESKTOP=GNOME"
 Environment="GALLIUM_DRIVER=d3d12"
 # No --virtual-monitor: the RDP client supplies the monitor(s) on connect.
 # This way the client's monitor becomes primary so the GNOME panel is visible.
-ExecStart=/usr/bin/env gnome-shell --wayland --no-x11 --headless --wayland-display wayland-grd --mode=user
+ExecStart=/usr/bin/env gnome-shell --wayland --headless --wayland-display wayland-grd --mode=user
 Restart=on-failure
 RestartSec=2
 

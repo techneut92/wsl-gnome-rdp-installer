@@ -1,0 +1,26 @@
+[Unit]
+Description=Replace WSLg /tmp/.X11-unix symlink with a real directory (so Xwayland can start in the RDP session)
+# WSL's /init re-creates /tmp/.X11-unix as a symlink to /mnt/wslg/.X11-unix
+# on every boot. Mutter's Xwayland refuses to start when /tmp/.X11-unix is
+# a symlink ("Directory \"/tmp/.X11-unix\" is missing the sticky bit") because
+# the X server expects a real directory mode 1777 to bind its abstract
+# sockets in. Once Xwayland fails, gnome-shell-headless falls into a restart
+# loop and the whole RDP session is dead.
+#
+# This oneshot replaces the symlink with a real mode-1777 directory and
+# symlinks X0 inside it back to WSLg's X server socket, so DISPLAY=:0 still
+# resolves to WSLg (Linux apps that were going to the Windows desktop via
+# WSLg keep working). Xwayland is then free to create X1/X2 in the same
+# directory for the RDP session.
+After=local-fs.target
+Before=multi-user.target
+ConditionPathIsSymbolicLink=/tmp/.X11-unix
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Use sh -c so the && chain aborts on failure of any step.
+ExecStart=/bin/sh -c 'rm /tmp/.X11-unix && mkdir -m 1777 /tmp/.X11-unix && ln -s /mnt/wslg/.X11-unix/X0 /tmp/.X11-unix/X0'
+
+[Install]
+WantedBy=multi-user.target

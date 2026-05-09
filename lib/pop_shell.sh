@@ -38,17 +38,37 @@ install_pop_shell() {
   # Pop Shell installed but with no keybindings wired up.
   touch "$POP_SHELL_SRC/.confirm_shortcut_change"
 
-  # WAYLAND_DISPLAY is set in our environment, so the Makefile's
-  # `restart-shell` step prints "WAYLAND_DISPLAY is set, not restarting
-  # shell" and skips. That's correct — gnome-shell on Wayland can't restart
-  # in place. We rely on install_systemd_units having already started a
-  # fresh gnome-shell that will pick up the new extension.
+  # `make local-install` does: depcheck → compile → install (copies into
+  # ~/.local/share/gnome-shell/extensions/) → configure (dconf writes) →
+  # restart-shell (no-op on Wayland) → enable.
+  #
+  # The trailing `gnome-extensions enable` will FAIL when gnome-shell was
+  # already running before this step (it doesn't auto-rescan the extensions
+  # dir). With set -e + pipefail in install.sh, that failure would abort
+  # the whole installer. We tolerate it here and recover below by bouncing
+  # gnome-shell so it picks up the new extension, then enabling explicitly.
+  set +e
   make -C "$POP_SHELL_SRC" local-install 2>&1 | tail -20
+  set -e
 
-  # Verify gnome-shell sees + enabled the extension. `make local-install`
-  # ends with `gnome-extensions enable`; if that fails (e.g. shell not yet
-  # running) the make target errors out — but we still want the extension
-  # ready for the next gnome-shell start, so re-attempt enable here.
+  # Bounce gnome-shell so it rescans the extensions dir and registers Pop
+  # Shell. grd's Requires=gnome-shell-headless means systemd will stop grd
+  # too — restart it after gnome-shell is back. Drops any in-progress RDP
+  # session, but the installer's running in a pts shell, not RDP.
+  if systemctl --user is-active --quiet gnome-shell-headless.service; then
+    log "Restarting gnome-shell-headless so it picks up Pop Shell…"
+    systemctl --user restart gnome-shell-headless.service
+    # gnome-shell needs ~2s to come up + register extensions on dbus.
+    local i
+    for i in $(seq 1 15); do
+      if gnome-extensions list 2>/dev/null | grep -qx "$POP_SHELL_UUID"; then
+        break
+      fi
+      sleep 1
+    done
+    systemctl --user restart gnome-remote-desktop-headless.service 2>/dev/null || true
+  fi
+
   if gnome-extensions list 2>/dev/null | grep -qx "$POP_SHELL_UUID"; then
     gnome-extensions enable "$POP_SHELL_UUID" 2>/dev/null || true
     if gnome-extensions info "$POP_SHELL_UUID" 2>/dev/null | grep -q '^[[:space:]]*Enabled: Yes'; then

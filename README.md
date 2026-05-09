@@ -1,5 +1,7 @@
 # wsl-gnome-rdp-installer
 
+> ⚠️ **Experimental.** This stitches together gnome-shell-headless, gnome-remote-desktop, mutter's Xwayland, WSLg's quirks, and several systemd workarounds for upstream bugs. It works on the author's machine and is being iterated on as upstream packages move. Expect things to break in unexpected ways across distro upgrades, kernel updates, GNOME versions, or WSL/WSLg revisions. Read the script before running it. No warranty — see [LICENSE](LICENSE).
+
 A scripted bootstrap for a **headless GNOME desktop inside a WSL2 distro**, served over RDP via `gnome-remote-desktop` so you can connect from the Windows host with `mstsc`.
 
 Targets Fedora-like (`dnf`) and Debian-like (`apt`) distros. Idempotent — re-runs are safe.

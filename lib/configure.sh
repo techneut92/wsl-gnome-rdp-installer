@@ -85,7 +85,16 @@ install_systemd_units() {
     wireplumber.service
 
   systemctl --user enable  gnome-shell-headless.service           >/dev/null
-  systemctl --user enable  gnome-remote-desktop-headless.service  >/dev/null
+  # The upstream gnome-remote-desktop-headless.service has
+  # `WantedBy=gnome-session.target` in its [Install] section, so a plain
+  # `systemctl --user enable` only links it into gnome-session.target.wants/.
+  # We don't run gnome-session in this headless stack (gnome-shell is launched
+  # directly with --mode=user), so that target never activates and grd never
+  # autostarts on boot — RDP only comes up because we restart it manually
+  # below. Use add-wants to additionally link it into default.target.wants/
+  # so it comes up alongside gnome-shell-headless.
+  systemctl --user enable     gnome-remote-desktop-headless.service  >/dev/null
+  systemctl --user add-wants  default.target gnome-remote-desktop-headless.service >/dev/null
   systemctl --user restart gnome-shell-headless.service
   systemctl --user restart gnome-remote-desktop-headless.service
 }

@@ -1,0 +1,17 @@
+[Unit]
+Description=Sync user flatpak .desktop+icon exports to /usr/share for WSLg
+Documentation=https://github.com/techneut92/wsl-gnome-rdp-installer
+After=default.target
+
+[Service]
+Type=oneshot
+# /usr/local/bin/wsl-flatpak-wslg-sync writes under /usr/share, so it
+# needs root. The companion sudoers drop-in (in extras/) grants this
+# user NOPASSWD specifically for that one binary.
+ExecStart=/usr/bin/sudo -n /usr/local/bin/wsl-flatpak-wslg-sync %u
+# Coalesce rapid-fire .path triggers from a single flatpak install
+# that touches multiple files in a row — runs once per refractory window.
+RuntimeMaxSec=120
+
+[Install]
+WantedBy=default.target

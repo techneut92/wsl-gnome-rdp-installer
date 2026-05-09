@@ -259,6 +259,13 @@ precheck_user_at_service           # installs drop-in + start probe
 prompt_all_settings
 
 ui_phase "Host setup"
+# WSLg .desktop sync infra goes in BEFORE install_packages — the path
+# unit needs to be live by the time install_flatpak_apps modifies the
+# flatpak exports dir, otherwise we'd miss the trigger and need a
+# manual first-run. Same for the theme-sync timer (so the very first
+# flatpak launch happens with the right colour scheme).
+install_wslg_flatpak_sync          # /usr/local/bin + sudoers + user .path/.service
+install_theme_sync                 # /usr/local/bin + user .timer/.service
 install_packages                   # uses DISTRO_FAMILY + INSTALL_DESKTOP/INSTALL_FLATPAK
 # Kernel modules (vgem+vkms) up front, alongside packages, so /dev/dri
 # is fully populated before gnome-shell-headless first starts and so
@@ -275,7 +282,6 @@ ensure_tls_cert                    # winpr-makecert if available, else openssl
 configure_grd                      # grdctl --headless settings
 install_user_environment           # ~/.config/environment.d/*.conf
 install_xdg_user_dirs              # ~/Downloads, ~/Documents, ~/Pictures, … (xdg-user-dirs-update)
-sync_gnome_theme_with_windows      # mirror Windows AppsUseLightTheme → GNOME color-scheme
 [ "${INSTALL_APPINDICATOR:-1}" = "1" ] && enable_appindicator_extension
 install_wslinterop_binfmt          # /etc/binfmt.d/WSLInterop.conf — keep .exe interop alive across shutdowns
 install_x11_unix_fix               # /etc/systemd/system/wslg-x11-unix-fix.service

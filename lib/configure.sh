@@ -52,47 +52,81 @@ install_user_environment() {
       XDG_SESSION_TYPE=wayland
 }
 
-sync_gnome_theme_with_windows() {
-  # Bridge Windows' light/dark mode → GNOME's color-scheme + gtk-theme
-  # at install time. WSLg doesn't propagate Windows theme to Linux apps,
-  # so a fresh GNOME session always comes up in the default light theme
-  # even when Windows is in dark mode. Read Windows' registry once via
-  # reg.exe interop and set GNOME accordingly. Apps that gate on the
-  # XDG color-scheme portal (Firefox, GNOME apps) follow immediately.
-  #
-  # Static one-shot: if the user toggles Windows theme later, run
-  # install.sh again or call gsettings directly. (A dynamic poll/timer
-  # would be nicer but adds a moving part for marginal value.)
-  ui_step "Mirror Windows theme into GNOME"
-  if ! command -v gsettings >/dev/null 2>&1; then
-    ui_skip "gsettings not available"
-    return 0
+install_wslg_flatpak_sync() {
+  # Generalises the old per-app expose_user_flatpaks_to_wslg into a
+  # background watcher: any flatpak install/uninstall/update modifies
+  # ~/.local/share/flatpak/exports/share/applications/, which trips a
+  # systemd .path unit, which kicks a oneshot service that calls
+  # `sudo /usr/local/bin/wsl-flatpak-wslg-sync $USER` to mirror
+  # .desktop + icons into /usr/share so WSLg's Start-Menu publisher
+  # picks them up. Sudoers drop-in scopes NOPASSWD to the one binary.
+  ui_step "WSLg flatpak auto-publish"
+  ui_spin "Install /usr/local/bin/wsl-flatpak-wslg-sync" \
+    sudo install -m 755 \
+      "$PROJECT_ROOT/extras/wslg-flatpak-sync/wsl-flatpak-wslg-sync" \
+      /usr/local/bin/wsl-flatpak-wslg-sync
+  ui_spin "Install /etc/sudoers.d/wsl-flatpak-wslg-sync" \
+    sudo install -m 440 \
+      "$PROJECT_ROOT/extras/wslg-flatpak-sync/sudoers.wsl-flatpak-wslg-sync" \
+      /etc/sudoers.d/wsl-flatpak-wslg-sync
+
+  install -d -m 755 "$SYSTEMD_USER_DIR"
+  install -m 644 \
+    "$PROJECT_ROOT/units/wsl-flatpak-wslg-sync.path" \
+    "$SYSTEMD_USER_DIR/wsl-flatpak-wslg-sync.path"
+  install -m 644 \
+    "$PROJECT_ROOT/units/wsl-flatpak-wslg-sync.service" \
+    "$SYSTEMD_USER_DIR/wsl-flatpak-wslg-sync.service"
+
+  systemctl --user daemon-reload
+  ui_spin "Enable wsl-flatpak-wslg-sync.path" \
+    systemctl --user enable --now wsl-flatpak-wslg-sync.path
+
+  # Initial run — covers any flatpak that was installed before the
+  # path unit was wired up (Firefox + ONLYOFFICE from this same
+  # install.sh, or anything pre-existing on a re-run).
+  local manifest=/var/lib/wsl-flatpak-wslg-sync/$USER.list
+  local before=0
+  [ -s "$manifest" ] && before=$(sudo wc -l < "$manifest" 2>/dev/null || echo 0)
+  ui_spin "Initial flatpak → /usr/share sync" \
+    sudo /usr/local/bin/wsl-flatpak-wslg-sync "$USER"
+  local after=0
+  [ -s "$manifest" ] && after=$(sudo wc -l < "$manifest" 2>/dev/null || echo 0)
+  # Newly published entries → "wsl -t" hint in verify summary, since
+  # WSLg only walks /usr/share at distro startup.
+  if [ "$after" -gt "$before" ]; then
+    export FLATPAKS_NEWLY_LINKED=1
   fi
-  if ! command -v reg.exe >/dev/null 2>&1; then
-    ui_skip "reg.exe not on PATH (interop unavailable)"
-    return 0
-  fi
-  # `AppsUseLightTheme` is the relevant value: 1 = light, 0 = dark.
-  # SystemUsesLightTheme controls Win11 taskbar colour and is a
-  # separate axis users sometimes set differently.
-  local val scheme gtk
-  val=$(reg.exe query \
-          'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' \
-          /v AppsUseLightTheme 2>/dev/null \
-        | awk '/AppsUseLightTheme/{print $NF}' \
-        | tr -d '\r')
-  case "$val" in
-    0x0) scheme=prefer-dark; gtk=Adwaita-dark ;;
-    0x1) scheme=default;     gtk=Adwaita      ;;
-    *)
-      ui_skip "Windows theme indeterminate (AppsUseLightTheme=$val)"
-      return 0
-      ;;
-  esac
-  gsettings set org.gnome.desktop.interface color-scheme "$scheme"
-  gsettings set org.gnome.desktop.interface gtk-theme    "$gtk"
-  ui_ok "Set color-scheme=$scheme + gtk-theme=$gtk"
-  ui_detail "Windows AppsUseLightTheme=$val → matched"
+}
+
+install_theme_sync() {
+  # Mirror Windows' light/dark theme into GNOME via a periodic poll.
+  # WSLg doesn't propagate Windows theme to Linux apps, so without
+  # this a fresh GNOME session always comes up in light theme even
+  # when Windows is in dark mode. The .timer fires the script every
+  # minute (and 5s after session start so first match is fast); the
+  # script reads HKCU\...\AppsUseLightTheme via reg.exe and runs
+  # gsettings to update org.gnome.desktop.interface.{color-scheme,
+  # gtk-theme}. Apps that gate on the XDG color-scheme portal (Firefox
+  # via toolkit, GNOME apps via libadwaita) follow within a couple of
+  # frames; non-portal-aware apps need a relaunch.
+  ui_step "Theme sync (Windows ↔ GNOME)"
+  ui_spin "Install /usr/local/bin/wsl-theme-sync" \
+    sudo install -m 755 \
+      "$PROJECT_ROOT/extras/wsl-theme-sync/wsl-theme-sync" \
+      /usr/local/bin/wsl-theme-sync
+
+  install -d -m 755 "$SYSTEMD_USER_DIR"
+  install -m 644 \
+    "$PROJECT_ROOT/units/wsl-theme-sync.service" \
+    "$SYSTEMD_USER_DIR/wsl-theme-sync.service"
+  install -m 644 \
+    "$PROJECT_ROOT/units/wsl-theme-sync.timer" \
+    "$SYSTEMD_USER_DIR/wsl-theme-sync.timer"
+
+  systemctl --user daemon-reload
+  ui_spin "Enable wsl-theme-sync.timer" \
+    systemctl --user enable --now wsl-theme-sync.timer
 }
 
 install_xdg_user_dirs() {

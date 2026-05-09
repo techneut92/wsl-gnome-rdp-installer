@@ -1,0 +1,14 @@
+[Unit]
+Description=Mirror Windows light/dark theme into GNOME
+Documentation=https://github.com/techneut92/wsl-gnome-rdp-installer
+# After=default.target so XDG_CURRENT_DESKTOP + the user dbus session
+# are settled — gsettings doesn't fault if dconf isn't reachable, but
+# the value won't get written cleanly.
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/wsl-theme-sync
+
+[Install]
+WantedBy=default.target

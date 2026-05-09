@@ -1,0 +1,16 @@
+[Unit]
+Description=Periodically poll Windows theme and apply to GNOME
+Documentation=https://github.com/techneut92/wsl-gnome-rdp-installer
+
+[Timer]
+# Fire 5s after session start so the first sync happens fast enough
+# that the user sees the right theme right after RDP-connecting.
+OnStartupSec=5s
+# Then every minute. reg.exe is cheap; the script no-ops if nothing
+# changed, so this is essentially zero cost on a steady-state desktop.
+OnUnitActiveSec=1min
+AccuracySec=15s
+Persistent=false
+
+[Install]
+WantedBy=default.target

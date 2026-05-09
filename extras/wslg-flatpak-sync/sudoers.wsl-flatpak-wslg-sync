@@ -1,0 +1,8 @@
+# Allow the local user to run the WSLg flatpak sync script without a
+# password. Scoped to the one binary path; no shell access escalation.
+# Installed at /etc/sudoers.d/wsl-flatpak-wslg-sync (mode 440).
+#
+# The %wheel group covers our default user dylan; if you've added
+# additional users that should also auto-publish their flatpaks,
+# extend the rule below or duplicate it for each user explicitly.
+%wheel ALL=(root) NOPASSWD: /usr/local/bin/wsl-flatpak-wslg-sync

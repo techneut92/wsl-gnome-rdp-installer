@@ -1,0 +1,107 @@
+#!/bin/bash
+# wsl-flatpak-wslg-sync — mirror a user's flatpak exports into the
+# system XDG paths that WSLg's Start-Menu publisher actually scans.
+#
+# WSLg (verified WSL 2.7.3.0) walks ONLY /usr/share/applications and
+# /usr/share/icons, and only reads regular files there — symlinks are
+# silently skipped. Per-user flatpak installs land in
+# ~$USER/.local/share/flatpak/exports/share/{applications,icons}/, so
+# without this sync they never reach the Windows Start Menu.
+#
+# Run as root (the user's systemd path-unit triggers it via sudo).
+# Argument: the user whose exports to sync.
+#
+# Idempotent: regular files copied with `install -m 644`, content
+# compared with `cmp -s` so already-current copies are no-ops.
+# Removal-aware: a manifest at /var/lib/wsl-flatpak-wslg-sync/<user>.list
+# tracks files we created; entries no longer present in the source on
+# the next run are removed. Won't touch any /usr/share/ file we didn't
+# create ourselves.
+
+set -eo pipefail
+
+USER_TO_SYNC="${1:?usage: $0 <user>}"
+USER_HOME=$(getent passwd "$USER_TO_SYNC" | cut -d: -f6)
+[ -d "$USER_HOME" ] || { echo "no home for $USER_TO_SYNC" >&2; exit 1; }
+
+SRC_APPS="$USER_HOME/.local/share/flatpak/exports/share/applications"
+SRC_ICONS="$USER_HOME/.local/share/flatpak/exports/share/icons"
+DST_APPS="/usr/share/applications"
+DST_ICONS="/usr/share/icons"
+
+STATE_DIR=/var/lib/wsl-flatpak-wslg-sync
+MANIFEST="$STATE_DIR/$USER_TO_SYNC.list"
+install -d -m 755 "$STATE_DIR"
+
+# Collect what we want to have in dest, plus the set of files that are
+# new/changed this run.
+declare -A wanted=()
+new_manifest=$(mktemp)
+trap 'rm -f "$new_manifest"' EXIT
+
+# .desktop entries — only the per-app symlinks flatpak creates,
+# never the mimeinfo.cache or other artefacts. Each entry maps to a
+# regular file in DST_APPS.
+if [ -d "$SRC_APPS" ]; then
+  for src in "$SRC_APPS"/*.desktop; do
+    [ -L "$src" ] || continue                    # skip non-export files
+    base=$(basename "$src")
+    dst="$DST_APPS/$base"
+    wanted["$dst"]=1
+    echo "$dst" >> "$new_manifest"
+    # cmp -s on the resolved-target content
+    if [ -f "$dst" ] && [ ! -L "$dst" ] && cmp -s "$src" "$dst"; then
+      continue
+    fi
+    install -m 644 "$src" "$dst"
+  done
+fi
+
+# Icons — walk hicolor (and any other theme dir) recursively, mirror
+# any per-file symlink found. Restrict to files; never recurse-replace
+# the whole tree because /usr/share/icons/hicolor/index.theme etc. is
+# distro-managed.
+if [ -d "$SRC_ICONS" ]; then
+  while IFS= read -r src; do
+    rel="${src#"$SRC_ICONS"/}"
+    dst="$DST_ICONS/$rel"
+    wanted["$dst"]=1
+    echo "$dst" >> "$new_manifest"
+    if [ -f "$dst" ] && [ ! -L "$dst" ] && cmp -s "$src" "$dst"; then
+      continue
+    fi
+    install -d -m 755 "$(dirname "$dst")"
+    install -m 644 "$src" "$dst"
+  done < <(find "$SRC_ICONS" -type l 2>/dev/null)
+fi
+
+# Removal: anything we previously wrote that's not wanted now → delete.
+# Ignore other files under /usr/share — the manifest constrains scope.
+if [ -f "$MANIFEST" ]; then
+  while IFS= read -r prev; do
+    [ -n "$prev" ] || continue
+    [ -n "${wanted[$prev]:-}" ] && continue
+    [ -f "$prev" ] && rm -f "$prev"
+    # try to clean up empty parent dirs in $DST_ICONS (won't touch
+    # /usr/share/icons/hicolor itself because rmdir refuses non-empty)
+    case "$prev" in
+      "$DST_ICONS"/*) rmdir --ignore-fail-on-non-empty -p "$(dirname "$prev")" 2>/dev/null || true ;;
+    esac
+  done < "$MANIFEST"
+fi
+
+# Atomically replace manifest with the new one.
+sort -u "$new_manifest" > "$MANIFEST.tmp"
+mv "$MANIFEST.tmp" "$MANIFEST"
+
+# Refresh the system desktop+icon caches (helps gnome-shell / WSLg
+# pick up new entries faster on systems that watch these caches).
+command -v update-desktop-database >/dev/null 2>&1 \
+  && update-desktop-database "$DST_APPS" 2>/dev/null || true
+for theme in "$DST_ICONS"/hicolor; do
+  [ -d "$theme" ] && command -v gtk-update-icon-cache >/dev/null 2>&1 \
+    && gtk-update-icon-cache --force --quiet "$theme" 2>/dev/null || true
+done
+
+# Print a one-line summary so journalctl shows progress.
+echo "wsl-flatpak-wslg-sync($USER_TO_SYNC): $(wc -l < "$MANIFEST") files in manifest"

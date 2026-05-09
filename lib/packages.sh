@@ -105,100 +105,35 @@ install_flatpak_apps() {
   ui_spin "Override flatpak sandbox: --nofilesystem=/tmp" \
     flatpak override --user --nofilesystem=/tmp
 
+  # Pin XCURSOR_SIZE for every flatpak (no app id = global override).
+  # Wayland-native flatpaks (Firefox) ignore this — mutter renders the
+  # cursor for them. Xwayland-via-flatpak ones (CEF apps like
+  # ONLYOFFICE Desktop Editors, Electron-X11, Java AWT) read XCURSOR_SIZE
+  # from env and end up with a ~4x cursor when mutter scales it for a
+  # HiDPI RDP client. Pinning to 24 (GNOME's default cursor-size)
+  # short-circuits that. Idempotent.
+  ui_spin "Override flatpak XCURSOR_SIZE=24 (global)" \
+    flatpak override --user --env=XCURSOR_SIZE=24
+
   ui_spin "Install Firefox + ONLYOFFICE flatpaks" \
     flatpak install --user --noninteractive --assumeyes \
       flathub \
       org.mozilla.firefox \
       org.onlyoffice.desktopeditors
 
-  # ONLYOFFICE Desktop Editors is a CEF/Chromium app, not Qt. Without
-  # XCURSOR_SIZE pinned its cursor renders at ~4x the right size on a
-  # mutter+RDP session because Chromium's Xwayland fallback fetches an
-  # XCURSOR_SIZE that mutter has scaled up for HiDPI logical-monitor
-  # math. Firefox doesn't hit it because it uses native Wayland cursors.
-  # Pin to GNOME's default cursor-size (24).
-  ui_spin "Override ONLYOFFICE cursor size: XCURSOR_SIZE=24" \
-    flatpak override --user --env=XCURSOR_SIZE=24 \
-      org.onlyoffice.desktopeditors
-
-  expose_user_flatpaks_to_wslg
+  # The wsl-flatpak-wslg-sync.path unit (installed by
+  # install_wslg_flatpak_sync earlier in the pipeline) is already
+  # watching the flatpak exports dir; the install above tripped it
+  # and the sync ran in the background. Nothing to do here.
 }
 
-# WSLg's Start-Menu publisher (runs at distro startup, generates Windows
-# .lnk shortcuts under "Apps → <distro>") scans only /usr/share/applications,
-# and only reads regular files — symlinks are silently skipped. Microsoft's
-# docs claim ~/.local/share/applications is also walked + symlinks are
-# resolved; empirically (WSL 2.7.3.0, 2026-05-09) neither is true.
-#
-# `flatpak install --user` writes its .desktop files to
-# ~/.local/share/flatpak/exports/share/applications/ — XDG-visible to
-# Linux clients (gnome-shell finds them in the dash) but invisible to
-# WSLg's publisher. Same goes for icons in
-# ~/.local/share/flatpak/exports/share/icons/.
-#
-# COPY the per-app .desktop files into /usr/share/applications and
-# mirror the per-app icon tree into /usr/share/icons/hicolor/.../apps/
-# (regular files, not symlinks). This means flatpak version-bumps that
-# rewrite the .desktop won't auto-flow through — but that's the same
-# tradeoff every other system-managed file in this installer makes,
-# and an install.sh re-run rewrites it cleanly.
-#
-# WSLg only republishes at distro startup; surfaces in the verify hint
-# via FLATPAKS_NEWLY_LINKED=1 so the user knows to `wsl -t <distro>`.
-expose_user_flatpaks_to_wslg() {
-  local src="$HOME/.local/share/flatpak/exports/share/applications"
-  local dst="/usr/share/applications"
-  [ -d "$src" ] || return 0
-  ui_step "Expose flatpaks to Windows Start Menu (WSLg)"
-
-  local f base copied=0 already=0
-  for f in "$src"/*.desktop; do
-    [ -e "$f" ] || continue
-    base=$(basename "$f")
-    # Regular file at dest with identical content → already in place.
-    if [ -f "$dst/$base" ] && [ ! -L "$dst/$base" ] \
-       && cmp -s "$f" "$dst/$base"; then
-      already=$((already + 1))
-      continue
-    fi
-    sudo rm -f "$dst/$base"
-    sudo install -m 644 "$f" "$dst/$base"
-    copied=$((copied + 1))
-  done
-
-  # Mirror per-app icons (hicolor tree) into /usr/share/icons. WSLg
-  # embeds the icon into the .lnk shortcut by walking standard XDG
-  # icon paths. Without this, Start Menu entries get a generic Linux
-  # icon. Same regular-file rule applies — copies, not symlinks.
-  # Scoped to org.mozilla.firefox* and org.onlyoffice.desktopeditors*
-  # so we don't shadow other parts of the hicolor tree.
-  local icon_src="$HOME/.local/share/flatpak/exports/share/icons"
-  local icon_dst="/usr/share/icons"
-  if [ -d "$icon_src" ]; then
-    local icon
-    while IFS= read -r icon; do
-      local rel="${icon#"$icon_src/"}"
-      local target="$icon_dst/$rel"
-      if [ -f "$target" ] && [ ! -L "$target" ] && cmp -s "$icon" "$target"; then
-        continue
-      fi
-      sudo rm -f "$target"
-      sudo install -d "$(dirname "$target")"
-      sudo install -m 644 "$icon" "$target"
-    done < <(find "$icon_src" -type l \
-                  \( -name 'org.mozilla.firefox*' \
-                  -o -name 'org.onlyoffice.desktopeditors*' \) 2>/dev/null)
-  fi
-
-  if [ "$copied" -gt 0 ]; then
-    ui_ok "Copied $copied flatpak .desktop entries (+ icons)"
-    ui_detail "$dst (copies of $src/*)"
-    # Drives the "distro restart needed" hint in verify_and_print_summary.
-    export FLATPAKS_NEWLY_LINKED=1
-  else
-    ui_skip "All $already flatpak .desktop entries already exposed"
-  fi
-}
+# Earlier versions of this file shipped expose_user_flatpaks_to_wslg
+# here. It was a one-shot copy of two specific apps' .desktop+icon files
+# into /usr/share, run from the install pipeline. Replaced by
+# install_wslg_flatpak_sync (lib/configure.sh) which installs a
+# generalised root-side sync script + a per-user systemd path-unit
+# watcher, so any flatpak install/uninstall/update auto-publishes to
+# the Start Menu without re-running this installer.
 
 # Install the standard GNOME desktop app suite (Files/Nautilus, terminal,
 # text editor, calculator, system monitor, etc.). The minimal install_packages

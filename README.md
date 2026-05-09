@@ -45,15 +45,17 @@ cd wsl-gnome-rdp-installer
 ./install.sh
 ```
 
-All interaction happens upfront. On a fresh run you get:
+All interaction happens upfront, inline (no full-screen TUI):
 
-1. An **RDP credentials prompt** — username (defaults to `$USER`), then password asked twice for confirmation. Empty or mismatched re-prompts. On a re-run where `gnome-remote-desktop` already has stored credentials, this is silently skipped (pass `-u`/`-p` to force a change).
-2. A **component checklist** (whiptail-driven, arrow keys to navigate / space to toggle / tab to OK / enter to confirm):
+1. **RDP credentials** — username (defaults to `$USER`), then password asked twice for confirmation. Empty or mismatched re-prompts. On a re-run where `gnome-remote-desktop` already has stored credentials, this is silently skipped (pass `-u`/`-p` to force a change).
+2. **Component checklist** (arrow keys to navigate, space to toggle, enter to confirm, q/esc to cancel):
    - GNOME desktop apps (Files, terminal, …)
-   - Flatpak apps (Firefox, ONLYOFFICE)
+   - Firefox (flatpak, flathub)
+   - ONLYOFFICE (flatpak, flathub)
    - Pop Shell tiling extension
-   - AppIndicator system-tray extension
    - Custom kernel for `/dev/dri/renderD128` (~10 min build, opt-in)
+
+   AppIndicator system-tray extension is mandatory (always installed) — apps that only present a tray icon (jetbrains-toolbox is the headline case) silently exit without it.
 
 Defaults to port `3390` (Windows already owns `3389` for its own RDP).
 
@@ -63,6 +65,10 @@ After the prompts, the rest of the run is uninterrupted — packages, units, cer
 mstsc /v:localhost:3390
 ```
 
+### Where install.sh actually lives
+
+The first run from a clone bootstraps the installer to `~/.local/share/wsl-gnome-rdp-installer/` (override with `WSL_RDP_INSTALL_DIR`) and re-execs from there. The `wsl-rdp-gnome-renew` shim and all subsequent runs operate on that stable location, so the renew flow doesn't depend on wherever the user happens to keep their clone.
+
 ### Re-running / self-update
 
 The installer drops a `wsl-rdp-gnome-renew` shim into `/usr/local/bin/` on first run. To re-run with the latest from upstream:
@@ -71,12 +77,14 @@ The installer drops a `wsl-rdp-gnome-renew` shim into `/usr/local/bin/` on first
 wsl-rdp-gnome-renew
 ```
 
-This re-execs `install.sh` from wherever you cloned it. If that location is a git checkout with an upstream tracking branch, it `git fetch` + `git pull --ff-only` against `origin/HEAD` first, then re-execs the updated script. Skipped automatically when:
+This `git fetch` + `git pull --ff-only` in `~/.local/share/wsl-gnome-rdp-installer/` against `origin/HEAD`, then re-execs the updated script. The shim sets `RESET_DIRTY=1` so any local edits in the install dir are clobbered before pulling — invoking renew explicitly means "give me upstream".
 
-- the source dir has no `.git`,
-- the working tree is dirty (don't clobber WIP),
+Skipped automatically when:
+
 - there's no upstream tracking branch (fork without `git push -u`),
 - fetch fails (offline / no auth — warns and continues with the local copy).
+
+Running `./install.sh` directly from your clone (instead of the renew shim) preserves working-tree edits — pass `RESET_DIRTY=1` manually to override that.
 
 Every step is idempotent, so re-running after an upstream fix is safe — already-good steps render `∼ already …` instead of redoing the work.
 

@@ -49,6 +49,205 @@ ui_skip()   { printf '  %s∼%s %s\n'  "$UI_DIM"    "$UI_RESET" "$1"; }
 ui_detail() { printf '    %s%s%s\n'  "$UI_DIM"    "$1" "$UI_RESET"; }
 ui_info()   { printf '    %s%s%s\n'  "$UI_DIM"    "$1" "$UI_RESET"; }
 
+# --- interactive prompts (inquirer / clack / gum style) -------------
+#
+# All three render in-place using ANSI escapes — no dialog overlay,
+# no full-screen takeover. After confirmation the multi-line prompt
+# collapses into a one-line dim summary so the transcript stays clean.
+#
+#   ui_input "Label" "default"      → echoes the value typed (or default)
+#   ui_password "Label"             → echoes the value typed (no confirm)
+#   ui_multiselect "Title" item ... → multi-select checklist; echoes
+#                                     selected tags, one per line.
+#                                     Each item is "tag|description|ON|OFF".
+#
+# All three require a TTY on stdin/stdout — die otherwise. The terminal
+# state (echo, icanon, cursor visibility) is restored via traps even
+# when the user kills the process mid-prompt.
+
+# Dim "?" prefix in cyan, matching clack/inquirer.
+_ui_q='?'
+_ui_chk_on='◉'
+_ui_chk_off='◯'
+
+# Self-contained die for prompt helpers — install.sh's normal flow
+# loads lib/common.sh which redefines this with full ui_err styling,
+# but the prompt helpers also need to abort gracefully when ui.sh
+# is sourced standalone (smoke tests, manual debugging).
+_ui_die() { printf '%s✗%s %s\n' "$UI_RED" "$UI_RESET" "$*" >&2; exit 1; }
+
+ui_input() {
+  local label="$1" default="${2:-}"
+  if [ "$UI_TTY" != "1" ] || ! [ -t 0 ]; then
+    _ui_die "ui_input: not a TTY"
+  fi
+  local prompt
+  if [ -n "$default" ]; then
+    prompt=$(printf '%s%s%s %s%s%s %s(%s)%s ' \
+      "$UI_BOLD$UI_CYAN" "$_ui_q" "$UI_RESET" \
+      "$UI_BOLD" "$label" "$UI_RESET" \
+      "$UI_DIM" "$default" "$UI_RESET")
+  else
+    prompt=$(printf '%s%s%s %s%s%s ' \
+      "$UI_BOLD$UI_CYAN" "$_ui_q" "$UI_RESET" \
+      "$UI_BOLD" "$label" "$UI_RESET")
+  fi
+  local input
+  IFS= read -rp "$prompt" input
+  input="${input:-$default}"
+  # Collapse the multi-part prompt into a single dim summary line.
+  printf '\033[1A\033[2K  %s✓%s %s%s%s\n' \
+    "$UI_GREEN" "$UI_RESET" "$UI_DIM" "$label: $input" "$UI_RESET"
+  printf '%s' "$input"
+}
+
+ui_password() {
+  local label="$1"
+  if [ "$UI_TTY" != "1" ] || ! [ -t 0 ]; then
+    _ui_die "ui_password: not a TTY"
+  fi
+  local prompt
+  prompt=$(printf '%s%s%s %s%s%s ' \
+    "$UI_BOLD$UI_CYAN" "$_ui_q" "$UI_RESET" \
+    "$UI_BOLD" "$label" "$UI_RESET")
+  local input
+  IFS= read -rsp "$prompt" input
+  echo
+  # Collapse into a single ✓ line; never show the password content.
+  printf '\033[1A\033[2K  %s✓%s %s%s%s\n' \
+    "$UI_GREEN" "$UI_RESET" "$UI_DIM" "$label: ********" "$UI_RESET"
+  printf '%s' "$input"
+}
+
+# Multi-select. Args after $1 (title): one or more "tag|description|state"
+# strings, where state is ON or OFF (initial check). Echoes selected tags
+# to stdout, one per line. Returns 1 on cancel (Esc / q / Ctrl+C).
+#
+# Renders inline at the cursor position. On each keypress the menu region
+# is overwritten in place via \033[<n>A (move up) + \033[J (clear to end
+# of screen). On confirm, the menu collapses to a one-line ✓ summary.
+ui_multiselect() {
+  if [ "$UI_TTY" != "1" ] || ! [ -t 0 ]; then
+    _ui_die "ui_multiselect: not a TTY"
+  fi
+  local title="$1"; shift
+
+  local -a tags descs states
+  local i raw
+  for raw in "$@"; do
+    tags+=("${raw%%|*}");        raw="${raw#*|}"
+    descs+=("${raw%%|*}");       raw="${raw#*|}"
+    states+=("$raw")
+  done
+  local n=${#tags[@]}
+  [ "$n" -eq 0 ] && return 1
+
+  # Save terminal state so traps can restore it.
+  local _saved_stty
+  _saved_stty=$(stty -g 2>/dev/null) || _saved_stty=""
+  _ui_multiselect_restore() {
+    [ -n "$_saved_stty" ] && stty "$_saved_stty" 2>/dev/null
+    printf '\033[?25h'
+  }
+  trap _ui_multiselect_restore EXIT INT TERM
+  stty -echo -icanon 2>/dev/null
+  printf '\033[?25l'   # hide cursor
+
+  local cursor=0
+  local hint_lines=2   # title + (↑↓ space enter) hint
+  local total_lines=$(( hint_lines + n ))
+  local first_render=1
+
+  _ui_multiselect_render() {
+    local i checkbox row_color desc
+    if [ "$first_render" = "0" ]; then
+      printf '\033[%dA\033[J' "$total_lines"
+    fi
+    first_render=0
+    printf '%s%s%s%s\n' "$UI_BOLD$UI_CYAN" "$_ui_q" "$UI_RESET" " $UI_BOLD$title$UI_RESET"
+    printf '  %s↑↓ navigate · space toggle · enter confirm · q/esc cancel%s\n' \
+      "$UI_DIM" "$UI_RESET"
+    for ((i=0; i<n; i++)); do
+      desc="${descs[i]}"
+      if [ "${states[i]}" = "ON" ]; then
+        checkbox="$UI_GREEN$_ui_chk_on$UI_RESET"
+      else
+        checkbox="$UI_DIM$_ui_chk_off$UI_RESET"
+      fi
+      if [ "$i" = "$cursor" ]; then
+        printf '  %s❯%s %s %s%s%s\n' \
+          "$UI_CYAN" "$UI_RESET" "$checkbox" "$UI_BOLD" "$desc" "$UI_RESET"
+      else
+        printf '    %s %s\n' "$checkbox" "$desc"
+      fi
+    done
+  }
+
+  local key key2
+  while :; do
+    _ui_multiselect_render
+
+    IFS= read -rsn1 key
+    case "$key" in
+      $'\033')
+        # Escape sequence — could be bare ESC or arrow.
+        IFS= read -rsn2 -t 0.05 key2 || key2=""
+        case "$key2" in
+          '[A'|'OA') cursor=$(( (cursor - 1 + n) % n )) ;;   # up
+          '[B'|'OB') cursor=$(( (cursor + 1) % n )) ;;        # down
+          '')        # bare ESC = cancel
+                     _ui_multiselect_restore; trap - EXIT INT TERM
+                     return 1 ;;
+        esac
+        ;;
+      ' ')
+        # space toggle
+        if [ "${states[cursor]}" = "ON" ]; then
+          states[cursor]=OFF
+        else
+          states[cursor]=ON
+        fi
+        ;;
+      ''|$'\n'|$'\r')
+        # enter = confirm
+        break
+        ;;
+      'q'|'Q'|$'\003')
+        # q / Ctrl+C = cancel
+        _ui_multiselect_restore; trap - EXIT INT TERM
+        return 1
+        ;;
+      'a'|'A')
+        # toggle-all helper (clack convention)
+        local any_off=0
+        for ((i=0; i<n; i++)); do
+          [ "${states[i]}" = "OFF" ] && any_off=1
+        done
+        for ((i=0; i<n; i++)); do
+          if [ "$any_off" = "1" ]; then states[i]=ON; else states[i]=OFF; fi
+        done
+        ;;
+    esac
+  done
+
+  _ui_multiselect_restore
+  trap - EXIT INT TERM
+
+  # Collapse the menu to a one-line ✓ summary listing chosen tags.
+  printf '\033[%dA\033[J' "$total_lines"
+  local -a chosen=()
+  for ((i=0; i<n; i++)); do
+    [ "${states[i]}" = "ON" ] && chosen+=("${tags[i]}")
+  done
+  printf '  %s✓%s %s%s: %s%s\n' \
+    "$UI_GREEN" "$UI_RESET" "$UI_DIM" "$title" "${chosen[*]:-(none)}" "$UI_RESET"
+
+  # Output selected tags on stdout for the caller.
+  for ((i=0; i<n; i++)); do
+    [ "${states[i]}" = "ON" ] && printf '%s\n' "${tags[i]}"
+  done
+}
+
 # --- inline spinner -------------------------------------------------
 # `ui_spin "label" cmd args...` — same in-place pattern npm/pnpm/yarn
 # use. Prints "⠋ <label>" on the current line, redraws the spinner

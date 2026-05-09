@@ -76,7 +76,8 @@ stage_uid_renumber() {
   local UNIT="/etc/systemd/system/wsl-renumber-uid.service"
   local SCRIPT="/usr/local/sbin/wsl-renumber-uid.sh"
 
-  log "Staging UID renumber: $USERNAME ($UID_NUM → $NEW_UID, gid $GID_NUM → $NEW_GID)"
+  ui_step "Stage UID renumber"
+  ui_detail "$USERNAME ($UID_NUM → $NEW_UID, gid $GID_NUM → $NEW_GID)"
 
   sudo install -d -m 755 /usr/local/sbin
   sudo tee "$SCRIPT" >/dev/null <<EOF
@@ -130,10 +131,11 @@ RemainAfterExit=no
 [Install]
 WantedBy=sysinit.target
 EOF
-  sudo systemctl daemon-reload
-  sudo systemctl enable wsl-renumber-uid.service >/dev/null
-
-  log "Renumber unit installed and enabled."
+  ui_spin "Install + enable wsl-renumber-uid.service" bash -c '
+    set -e
+    sudo systemctl daemon-reload
+    sudo systemctl enable wsl-renumber-uid.service
+  '
 
   # The WSL launcher caches the default user's UID in the Windows registry
   # at install time (HKCU\...\Lxss\<GUID>\DefaultUid). After the renumber,
@@ -154,26 +156,25 @@ ensure_wsl_conf_default_user() {
 
   if [ -f "$CONF" ] \
      && sudo grep -qE "^[[:space:]]*default[[:space:]]*=[[:space:]]*${USERNAME}[[:space:]]*$" "$CONF"; then
-    log "/etc/wsl.conf already declares default=${USERNAME}; no change."
+    ui_skip "/etc/wsl.conf already declares default=${USERNAME}"
     return 0
   fi
 
   if [ -f "$CONF" ] \
      && sudo grep -qE '^[[:space:]]*\[user\][[:space:]]*$' "$CONF"; then
-    warn "/etc/wsl.conf already has a [user] section but no 'default=${USERNAME}'."
-    warn "Please add it manually before running 'wsl.exe -t ${WSL_DISTRO_NAME:-this distro}'."
-    warn "Without it, the WSL launcher will keep using the old cached UID after"
-    warn "the renumber and drop you into a root shell."
+    ui_warn "/etc/wsl.conf has a [user] section but no 'default=${USERNAME}'"
+    ui_detail "add it manually before 'wsl.exe -t ${WSL_DISTRO_NAME:-this distro}'"
+    ui_detail "otherwise the launcher uses the old cached UID and drops you to root"
     return 0
   fi
 
-  log "Appending [user]default=${USERNAME} to /etc/wsl.conf"
   sudo install -d -m 755 /etc
   sudo tee -a "$CONF" >/dev/null <<EOF
 
 [user]
 default=${USERNAME}
 EOF
+  ui_ok "Append [user]default=${USERNAME} to /etc/wsl.conf"
 }
 
 # Front-end: detect collision, prompt, stage renumber if chosen.
@@ -188,8 +189,9 @@ precheck_cgroup_collision() {
   local NEW_UID
   NEW_UID="$(pick_next_free_uid)"
 
-  warn "Another WSL2 distro is using /user.slice/user-${UID_NUM}.slice/user@${UID_NUM}.service/."
-  warn "user@${UID_NUM}.service in this distro cannot start until that's resolved."
+  ui_step "Multi-distro cgroup collision detected"
+  ui_warn "Another WSL2 distro is using /user.slice/user-${UID_NUM}.slice/user@${UID_NUM}.service/"
+  ui_detail "user@${UID_NUM}.service in this distro cannot start until that's resolved"
   echo
   echo "Options:"
   echo "  1) Renumber this user to UID ${NEW_UID} now (recommended, permanent)."
@@ -229,7 +231,7 @@ EOF
       die "Run 'wsl.exe --shutdown' from Windows, reopen this distro, and re-run."
       ;;
     3)
-      warn "Continuing despite collision; user@${UID_NUM}.service will fail."
+      ui_warn "Continuing despite collision; user@${UID_NUM}.service will fail."
       ;;
     *)
       die "No valid choice made; aborting."

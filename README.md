@@ -53,6 +53,23 @@ Then from Windows:
 mstsc /v:localhost:3390
 ```
 
+### Re-running / self-update
+
+The installer drops a `wsl-rdp-gnome-renew` shim into `/usr/local/bin/` on first run. To re-run with the latest from upstream:
+
+```bash
+wsl-rdp-gnome-renew
+```
+
+This re-execs `install.sh` from wherever you cloned it. If that location is a git checkout with an upstream tracking branch, it `git fetch` + `git pull --ff-only` against `origin/HEAD` first, then re-execs the updated script. Skipped automatically when:
+
+- the source dir has no `.git`,
+- the working tree is dirty (don't clobber WIP),
+- there's no upstream tracking branch (fork without `git push -u`),
+- fetch fails (offline / no auth — warns and continues with the local copy).
+
+Every step is idempotent, so re-running after an upstream fix is safe — already-good steps render `∼ already …` instead of redoing the work.
+
 ### Flags / env vars
 
 | Flag | Env var          | Purpose |
@@ -62,6 +79,7 @@ mstsc /v:localhost:3390
 | `-P PORT`     | `RDP_PORT`     | RDP listen port (default: `3390`) |
 | `-m`          | `INSTALL_DESKTOP=0` | Minimal: skip the full GNOME desktop app suite (Files, terminal, etc.) |
 |               | `INSTALL_POP_SHELL=0` | Skip the Pop Shell tiling extension build |
+|               | `INSTALL_RENDERD=1` / `0` | Auto-answer the optional custom-kernel prompt (see [Optional: custom kernel for `/dev/dri/renderD128`](#optional-custom-kernel-for-devdrirenderd128)) |
 
 ---
 
@@ -79,6 +97,40 @@ mstsc /v:localhost:3390
 
 - **No hardware video encode for RDP.** `gnome-remote-desktop` requires a non-NULL DRM render-node string from EGL, but `/dev/dri` doesn't exist on WSL2 distros. All grd hwaccel paths (NVENC, VA-API, Vulkan) bail and fall back to software RFX progressive. Mutter compositing is hardware; only the *encode* side is CPU.
 - **No CUDA↔GL interop.** Microsoft only ships NVIDIA's compute libs (`libcuda`, `libnvidia-encode`) in `/usr/lib/wsl/lib/`, not `libGL_nvidia` / `libEGL_nvidia`. Nothing you can install fixes this on a stock WSL2 setup.
+
+---
+
+## Optional: custom kernel for `/dev/dri/renderD128`
+
+At the end of the install, you'll be asked whether to build a custom WSL2 kernel that exposes `/dev/dri/renderD128` (a virtual DRM render node, via `CONFIG_DRM_VGEM=y` + `CONFIG_DRM_VKMS=y`). It's off by default — say `y` to opt in, or pre-answer with `INSTALL_RENDERD=1` / `INSTALL_RENDERD=0`.
+
+**Why you might want it.** Microsoft's stock WSL kernel ships no DRM device at all, so any Linux app that gates a feature on a render node existing silently disables that feature. Adding VGEM unblocks:
+
+- **PipeWire dma-buf screen capture** — `xdg-desktop-portal-gnome` screencast, OBS Studio's PipeWire source, browser screen-share via PipeWire.
+- **EGL device-platform consumers** — gstreamer's GL pipeline, ffmpeg's `egl` source, headless rendering test harnesses.
+- **Wayland clients that probe DRI before flipping to Wayland mode** — some Electron apps (Slack, Discord, VS Code with `--ozone-platform=wayland`), nested Wayland compositors, some games.
+- **Browsers' GPU sandboxing checks** — Firefox WebRender will at least *try* the hardware-decode codepath instead of disabling it outright.
+
+**What it does NOT do.**
+
+- Does **not** add real GPU acceleration. VGEM is a virtual driver — apps still render via llvmpipe (CPU). It only unblocks codepaths that disable themselves when no render node exists.
+- Does **not** fix the chroma watermark in the RDP video stream. That's a separate problem in `gnome-remote-desktop`'s EGL gate that the kernel rebuild alone doesn't unlock; see the comment block in `lib/renderd_kernel.sh` for the three-layer analysis.
+- Does **not** help apps that already work via WSLg's relay (those use Microsoft's own dma-buf path through `/mnt/wslg/`).
+
+**Cost.**
+
+- 5–10 min build time (uses up to 8 cores).
+- ~500 MB of build dependencies (`gcc`, `make`, `bison`, `flex`, `libelf-dev`, etc.) installed temporarily.
+- Requires `wsl --shutdown` from Windows to apply.
+- Reversible: your `.wslconfig` is backed up to `.wslconfig.before-wsl-gnome-rdp` before being modified, and any pre-existing `bzImage` is preserved as `bzImage.before-wsl-gnome-rdp`.
+
+**After installing**, run `wsl --shutdown` from a Windows shell, re-launch the distro, and verify with:
+
+```bash
+./extras/renderd/verify.sh
+```
+
+which prints PASS/FAIL for each of: VGEM is the active driver, `/dev/dri/renderD128` exists, `.wslconfig` points at the new kernel, your user is in the `video` and `render` groups.
 
 ---
 
@@ -127,7 +179,11 @@ lib/
   cert.sh                                      TLS cert generation
   configure.sh                                 grdctl + systemd user units
   pop_shell.sh                                 Pop Shell build + enable
+  renderd_kernel.sh                            opt-in custom kernel for /dev/dri/renderD128
   verify.sh                                    end-of-run sanity check + summary
+extras/
+  renderd/
+    verify.sh                                  post-`wsl --shutdown` checks for the custom kernel
 units/
   gnome-shell-headless.service                 user unit
   gnome-remote-desktop-headless.override.conf  software-EGL override for grd

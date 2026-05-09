@@ -24,9 +24,9 @@ USER_AT_DROPIN_FILE="$USER_AT_DROPIN_DIR/99-wsl-cgroup-fix.conf"
 apply_user_at_workaround() {
   if [ -f "$USER_AT_DROPIN_FILE" ] \
      && grep -q '^DelegateSubgroup=$' "$USER_AT_DROPIN_FILE" 2>/dev/null; then
+    ui_skip "user@.service drop-in already in place"
     return 0
   fi
-  log "Installing user@.service drop-in for systemd 259 cgroup bug…"
   sudo install -d -m 755 "$USER_AT_DROPIN_DIR"
   sudo tee "$USER_AT_DROPIN_FILE" >/dev/null <<'EOF'
 # Workaround for systemd issue #41278 (fixed in PR #41304, v261).
@@ -37,7 +37,9 @@ apply_user_at_workaround() {
 [Service]
 DelegateSubgroup=
 EOF
-  sudo systemctl daemon-reload
+  ui_spin "Install user@.service drop-in + reload" \
+    sudo systemctl daemon-reload
+  ui_detail "$USER_AT_DROPIN_FILE"
 }
 
 # Cheap up-front check: install the drop-in, then prove user@$UID.service
@@ -52,15 +54,17 @@ precheck_user_at_service() {
   local UID_NUM
   UID_NUM=$(id -u)
 
+  ui_step "user@$UID_NUM.service"
   apply_user_at_workaround
 
   if systemctl is-active --quiet "user@$UID_NUM.service" 2>/dev/null; then
+    ui_ok "already active"
     return 0
   fi
 
-  log "Starting user@$UID_NUM.service…"
   sudo systemctl reset-failed "user@$UID_NUM.service" 2>/dev/null || true
-  if ! sudo systemctl start "user@$UID_NUM.service" 2>/dev/null; then
+  if ! ui_spin "Start user@$UID_NUM.service" \
+        sudo systemctl start "user@$UID_NUM.service"; then
     die "user@$UID_NUM.service failed to start. The cgroup is likely already
        dirtied by a prior failed start on this boot — orphaned subgroups
        under /sys/fs/cgroup/user.slice/user-$UID_NUM.slice/user@$UID_NUM.service/
@@ -78,10 +82,12 @@ ensure_user_dbus() {
   UID_NUM=$(id -u)
   local DBUS_SOCK="/run/user/$UID_NUM/bus"
 
+  ui_step "User D-Bus"
+
   # 1. /run/user/$UID may not exist yet. Create it if missing.
   if [ ! -d "/run/user/$UID_NUM" ]; then
-    log "Creating /run/user/$UID_NUM…"
     sudo install -d -m 700 -o "$USER" -g "$USER" "/run/user/$UID_NUM"
+    ui_ok "Create /run/user/$UID_NUM"
   fi
   export XDG_RUNTIME_DIR="/run/user/$UID_NUM"
 
@@ -97,13 +103,13 @@ ensure_user_dbus() {
   systemctl --user start dbus.socket dbus.service 2>/dev/null || true
 
   # 6. Wait for the bus to be reachable.
-  log "Waiting for user D-Bus session at $DBUS_SOCK…"
-  local i
-  for i in $(seq 1 30); do
-    if [ -S "$DBUS_SOCK" ] && busctl --user --no-pager list >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 1
-  done
-  die "User D-Bus didn't come up after 30s. Try: 'wsl --shutdown' on Windows, then re-enter and re-run."
+  ui_spin "Wait for $DBUS_SOCK (≤30s)" bash -c '
+    for i in $(seq 1 30); do
+      if [ -S "'"$DBUS_SOCK"'" ] && busctl --user --no-pager list >/dev/null 2>&1; then
+        exit 0
+      fi
+      sleep 1
+    done
+    exit 1
+  ' || die "User D-Bus didn't come up after 30s. Try: 'wsl --shutdown' on Windows, then re-enter and re-run."
 }

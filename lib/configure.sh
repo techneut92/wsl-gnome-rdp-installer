@@ -1,19 +1,22 @@
 # lib/configure.sh — grdctl settings + systemd user units.
 
 configure_grd() {
-  log "Configuring gnome-remote-desktop (port $RDP_PORT)…"
+  ui_step "Configure gnome-remote-desktop"
+  ui_detail "port $RDP_PORT"
   # Note: FreeRDP prints "[ERROR] x509_utils_from_pem: BIO_new failed for
   # certificate" during these calls — that line is benign noise from FreeRDP's
   # auth path probing; the dconf settings are still written.
-  grdctl --headless rdp set-tls-cert "$TLS_DIR/rdp.crt"
-  grdctl --headless rdp set-tls-key  "$TLS_DIR/rdp.key"
-  if [ "${REUSE_CREDS:-0}" = "0" ]; then
-    # Pass both args — running interactively segfaults in grd 50.x without TPM.
-    grdctl --headless rdp set-credentials "$RDP_USERNAME" "$RDP_PASSWORD"
-  fi
-  grdctl --headless rdp set-port "$RDP_PORT"
-  grdctl --headless rdp disable-port-negotiation
-  grdctl --headless rdp enable
+  ui_spin "Set TLS cert/key + port + enable RDP" bash -c '
+    set -e
+    grdctl --headless rdp set-tls-cert "'"$TLS_DIR"'/rdp.crt"
+    grdctl --headless rdp set-tls-key  "'"$TLS_DIR"'/rdp.key"
+    if [ "'"${REUSE_CREDS:-0}"'" = "0" ]; then
+      grdctl --headless rdp set-credentials "'"$RDP_USERNAME"'" "'"$RDP_PASSWORD"'"
+    fi
+    grdctl --headless rdp set-port "'"$RDP_PORT"'"
+    grdctl --headless rdp disable-port-negotiation
+    grdctl --headless rdp enable
+  '
 }
 
 install_user_environment() {
@@ -29,24 +32,28 @@ install_user_environment() {
   # The gnome-shell unit also sets GALLIUM_DRIVER + the XDG vars in its own
   # Environment= block, so the compositor itself doesn't depend on these
   # files being read.
+  ui_step "User environment overrides"
   local target_dir="$HOME/.config/environment.d"
-  log "Installing user environment overrides to $target_dir…"
   mkdir -p "$target_dir"
   for src in "$PROJECT_ROOT"/environment.d/*.conf; do
     install -m 644 "$src" "$target_dir/$(basename "$src")"
   done
+  ui_ok "Install environment.d/*.conf"
+  ui_detail "$target_dir"
   # Push into the already-running user manager so the change takes effect
   # without a logout. New dbus activations and `systemctl --user start`s pick
   # this up immediately; apps already running keep their old env until
   # restarted.
-  systemctl --user set-environment \
-    GALLIUM_DRIVER=d3d12 \
-    GDK_BACKEND=wayland \
-    XDG_CURRENT_DESKTOP=GNOME \
-    XDG_SESSION_TYPE=wayland
+  ui_spin "Push env into running user manager" \
+    systemctl --user set-environment \
+      GALLIUM_DRIVER=d3d12 \
+      GDK_BACKEND=wayland \
+      XDG_CURRENT_DESKTOP=GNOME \
+      XDG_SESSION_TYPE=wayland
 }
 
 enable_appindicator_extension() {
+  ui_step "AppIndicator extension"
   # Add the AppIndicator/KStatusNotifierItem extension to the user's
   # `enabled-extensions` list. Without it gnome-shell exposes no system
   # tray (no StatusNotifierWatcher on the session bus); apps whose UI is
@@ -65,7 +72,7 @@ enable_appindicator_extension() {
   current="$(gsettings get org.gnome.shell enabled-extensions 2>/dev/null || echo '@as []')"
   case "$current" in
     *"$uuid"*)
-      log "AppIndicator extension already enabled."
+      ui_skip "already enabled"
       return 0
       ;;
   esac
@@ -77,10 +84,12 @@ enable_appindicator_extension() {
     # (Pop Shell, etc.).
     gsettings set org.gnome.shell enabled-extensions "${current%]}, '$uuid']"
   fi
-  log "Enabled AppIndicator extension (takes effect on next gnome-shell start)."
+  ui_ok "Enable AppIndicator"
+  ui_detail "takes effect on next gnome-shell start"
 }
 
 install_x11_unix_fix() {
+  ui_step "WSLg /tmp/.X11-unix fix"
   # WSL's /init recreates /tmp/.X11-unix as a symlink to /mnt/wslg/.X11-unix
   # on every boot. Mutter's Xwayland refuses to start when that path is a
   # symlink ("Directory \"/tmp/.X11-unix\" is missing the sticky bit"); on
@@ -89,21 +98,26 @@ install_x11_unix_fix() {
   # mode-1777 directory and X0-symlinks WSLg's socket back in (so DISPLAY=:0
   # still resolves to WSLg apps that go through Windows). Mutter then
   # spawns its own Xwayland under :1 inside the RDP session.
-  log "Installing /etc/systemd/system/wslg-x11-unix-fix.service (system unit)…"
-  sudo install -m 644 "$PROJECT_ROOT/units/wslg-x11-unix-fix.service" \
-                       /etc/systemd/system/wslg-x11-unix-fix.service
-  sudo systemctl daemon-reload
-  sudo systemctl enable wslg-x11-unix-fix.service >/dev/null
+  ui_spin "Install + enable wslg-x11-unix-fix.service" bash -c '
+    set -e
+    sudo install -m 644 "'"$PROJECT_ROOT"'/units/wslg-x11-unix-fix.service" \
+                         /etc/systemd/system/wslg-x11-unix-fix.service
+    sudo systemctl daemon-reload
+    sudo systemctl enable wslg-x11-unix-fix.service
+  '
   # Apply right now if the symlink is still in place from this boot (the
   # unit's ConditionPathIsSymbolicLink= guard makes it a no-op after the
   # first run, so re-running the installer is safe).
   if [ -L /tmp/.X11-unix ]; then
-    sudo systemctl start wslg-x11-unix-fix.service
+    ui_spin "Run wslg-x11-unix-fix.service now" \
+      sudo systemctl start wslg-x11-unix-fix.service
+  else
+    ui_skip "/tmp/.X11-unix already a real dir"
   fi
 }
 
 install_systemd_units() {
-  log "Writing systemd user units to $SYSTEMD_USER_DIR…"
+  ui_step "User systemd units"
   mkdir -p "$SYSTEMD_USER_DIR" \
            "$SYSTEMD_USER_DIR/gnome-remote-desktop-headless.service.d"
 
@@ -115,13 +129,16 @@ install_systemd_units() {
 
   install -m 644 "$PROJECT_ROOT/units/wslg-pulse-detach.service" \
                  "$SYSTEMD_USER_DIR/wslg-pulse-detach.service"
+  ui_ok "Write unit files"
+  ui_detail "$SYSTEMD_USER_DIR"
 
-  log "Reloading systemd user manager and starting services…"
-  systemctl --user daemon-reload
-  systemctl --user reset-failed \
-    gnome-shell-headless.service \
-    gnome-remote-desktop-headless.service \
-    pipewire-pulse.socket 2>/dev/null || true
+  ui_spin "Reload user manager + reset-failed" bash -c '
+    systemctl --user daemon-reload
+    systemctl --user reset-failed \
+      gnome-shell-headless.service \
+      gnome-remote-desktop-headless.service \
+      pipewire-pulse.socket 2>/dev/null || true
+  '
 
   # WSLg pre-symlinks /run/user/$UID/pulse → /mnt/wslg/runtime-dir/pulse,
   # which is mode 0700 owned by UID 1000. On a renumbered UID (see
@@ -129,19 +146,20 @@ install_systemd_units() {
   # detach unit BEFORE pipewire-pulse.socket so the latter can bind. The
   # unit is a no-op when the WSLg target is writable (i.e. the dylan=1000
   # case on the first distro).
-  systemctl --user enable --now wslg-pulse-detach.service
+  ui_spin "Enable wslg-pulse-detach.service" \
+    systemctl --user enable --now wslg-pulse-detach.service
 
   # PipeWire + WirePlumber are required by gnome-remote-desktop for screen
   # capture. They auto-start on graphical login but NOT in a headless + linger
   # setup, so enable + start them explicitly. Without them the RDP handshake
   # completes and the session dies at video-stream init — Windows reports
   # error 0x904 "session ended". pipewire-pulse handles RDP audio.
-  systemctl --user enable --now \
-    pipewire.socket \
-    pipewire-pulse.socket \
-    wireplumber.service
+  ui_spin "Enable pipewire + wireplumber" \
+    systemctl --user enable --now \
+      pipewire.socket \
+      pipewire-pulse.socket \
+      wireplumber.service
 
-  systemctl --user enable  gnome-shell-headless.service           >/dev/null
   # The upstream gnome-remote-desktop-headless.service has
   # `WantedBy=gnome-session.target` in its [Install] section, so a plain
   # `systemctl --user enable` only links it into gnome-session.target.wants/.
@@ -150,8 +168,11 @@ install_systemd_units() {
   # autostarts on boot — RDP only comes up because we restart it manually
   # below. Use add-wants to additionally link it into default.target.wants/
   # so it comes up alongside gnome-shell-headless.
-  systemctl --user enable     gnome-remote-desktop-headless.service  >/dev/null
-  systemctl --user add-wants  default.target gnome-remote-desktop-headless.service >/dev/null
-  systemctl --user restart gnome-shell-headless.service
-  systemctl --user restart gnome-remote-desktop-headless.service
+  ui_spin "Enable + restart RDP services" bash -c '
+    systemctl --user enable    gnome-shell-headless.service              >/dev/null
+    systemctl --user enable    gnome-remote-desktop-headless.service     >/dev/null
+    systemctl --user add-wants default.target gnome-remote-desktop-headless.service >/dev/null
+    systemctl --user restart gnome-shell-headless.service
+    systemctl --user restart gnome-remote-desktop-headless.service
+  '
 }

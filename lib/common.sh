@@ -1,13 +1,21 @@
-# lib/common.sh — log helpers + distro detection.
+# lib/common.sh — distro detection + log compatibility shims.
 #
-# Sets the following globals:
+# UI helpers (ui_step, ui_ok, ui_warn, ui_err, ui_skip, ui_detail,
+# ui_spin, ui_phase, ui_subhead) live in lib/ui.sh, sourced before
+# this file from install.sh.
+#
+# `log`/`warn`/`die` are kept as backwards-compat aliases for any
+# call site we haven't migrated yet — they map onto the ui_* helpers
+# so the visual is consistent. Prefer the ui_* helpers in new code.
+#
+# Sets the following globals (via detect_distro):
 #   DISTRO_ID        e.g. fedora, ubuntu, debian
 #   DISTRO_VERSION   e.g. 44, 24.04, 13
 #   DISTRO_FAMILY    fedora-like | debian-like
 
-log()  { printf '\033[1;32m[+]\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
+log()  { ui_step "$*"; }
+warn() { ui_warn "$*"; }
+die()  { ui_err  "$*"; exit 1; }
 
 detect_distro() {
   [ -f /etc/os-release ] || die "/etc/os-release missing — can't detect distro"

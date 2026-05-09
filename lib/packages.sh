@@ -13,11 +13,19 @@ install_packages() {
       # (StatusNotifierWatcher on the session bus). Without it apps that
       # only present a tray icon — jetbrains-toolbox is the headline case —
       # silently exit because no UI keeps the process alive.
+      # gnome-keyring is required by Fedora's xdg-desktop-portal config:
+      # /usr/share/xdg-desktop-portal/portals.conf declares
+      # `org.freedesktop.impl.portal.Secret=gnome-keyring;`. Without
+      # gnome-keyring installed (and gnome-keyring-daemon running),
+      # the portal frontend can crashloop while waiting for the Secret
+      # impl to become claimable on dbus, which knock-on starves
+      # Firefox/Nautilus/anything portal-aware. Reproduced 2026-05-10.
       ui_spin "Install GNOME + RDP packages (dnf)" \
         sudo dnf install -y \
           gnome-remote-desktop \
           gnome-shell \
           gnome-shell-extension-appindicator \
+          gnome-keyring \
           mutter \
           openssl \
           flatpak \
@@ -34,6 +42,7 @@ install_packages() {
           gnome-remote-desktop \
           gnome-shell \
           gnome-shell-extension-appindicator \
+          gnome-keyring \
           mutter \
           openssl \
           dbus-user-session \

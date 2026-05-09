@@ -52,6 +52,44 @@ install_user_environment() {
       XDG_SESSION_TYPE=wayland
 }
 
+install_default_wallpaper() {
+  # Drop in the project's wallpaper as the first-run default. Only sets
+  # gsettings when we haven't done so before (marker at
+  # ~/.local/share/wsl-gnome-rdp-installer/.wallpaper-set), so a user
+  # who chose their own wallpaper after the first install isn't
+  # overridden every install.sh re-run. The image itself is still
+  # refreshed in /usr/share/backgrounds so it survives image bumps.
+  ui_step "Default wallpaper"
+  local src="$PROJECT_ROOT/assets/pane-wallpaper.jpg"
+  local dst=/usr/share/backgrounds/pane-wallpaper.jpg
+  if [ ! -f "$src" ]; then
+    ui_skip "no asset/pane-wallpaper.jpg in project dir"
+    return 0
+  fi
+  if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+    ui_skip "$dst already current"
+  else
+    ui_spin "Install $dst" \
+      sudo install -D -m 644 "$src" "$dst"
+  fi
+  if ! command -v gsettings >/dev/null 2>&1; then
+    ui_skip "gsettings unavailable; skipping desktop binding"
+    return 0
+  fi
+  local marker="$HOME/.local/share/wsl-gnome-rdp-installer/.wallpaper-set"
+  if [ -f "$marker" ]; then
+    ui_skip "already bound (marker exists; preserving user's choice)"
+    return 0
+  fi
+  install -d "$(dirname "$marker")"
+  gsettings set org.gnome.desktop.background picture-uri      "file://$dst"
+  gsettings set org.gnome.desktop.background picture-uri-dark "file://$dst"
+  gsettings set org.gnome.desktop.background picture-options  zoom
+  : > "$marker"
+  ui_ok "Set as desktop background"
+  ui_detail "$dst (zoom)"
+}
+
 install_xdg_user_dirs() {
   # Standard ~/Downloads, ~/Documents, ~/Pictures, ~/Music, ~/Videos,
   # ~/Desktop, ~/Templates, ~/Public. On a normal GNOME box these are

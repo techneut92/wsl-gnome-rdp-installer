@@ -285,6 +285,7 @@ ensure_tls_cert                    # winpr-makecert if available, else openssl
 configure_grd                      # grdctl --headless settings
 install_user_environment           # ~/.config/environment.d/*.conf
 install_xdg_user_dirs              # ~/Downloads, ~/Documents, ~/Pictures, … (xdg-user-dirs-update)
+install_default_wallpaper          # /usr/share/backgrounds/pane-wallpaper.jpg + gsettings (first-install only)
 [ "${INSTALL_APPINDICATOR:-1}" = "1" ] && enable_appindicator_extension
 install_x11_unix_fix               # /etc/systemd/system/wslg-x11-unix-fix.service
 install_systemd_units              # write + enable + restart

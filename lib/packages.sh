@@ -9,9 +9,14 @@ install_packages() {
       # tested distro, and gnome-remote-desktop's own daemon validates certs
       # via libfreerdp at runtime. git/make/nodejs/typescript are pulled
       # in for the Pop Shell build (lib/pop_shell.sh).
+      # gnome-shell-extension-appindicator gives us a system-tray host
+      # (StatusNotifierWatcher on the session bus). Without it apps that
+      # only present a tray icon — jetbrains-toolbox is the headline case —
+      # silently exit because no UI keeps the process alive.
       sudo dnf install -y \
         gnome-remote-desktop \
         gnome-shell \
+        gnome-shell-extension-appindicator \
         mutter \
         openssl \
         flatpak \
@@ -26,6 +31,7 @@ install_packages() {
       sudo apt-get install -y --no-install-recommends \
         gnome-remote-desktop \
         gnome-shell \
+        gnome-shell-extension-appindicator \
         mutter \
         openssl \
         dbus-user-session \
@@ -48,17 +54,38 @@ install_packages() {
   fi
 }
 
-# Set up flathub (per-user remote, no sudo) and install Firefox as a flatpak.
+# Set up flathub (per-user remote, no sudo) and install desktop flatpaks.
 # We prefer flatpak Firefox over the distro package so the same install.sh
 # produces the same browser experience on Fedora and Debian-likes (Debian
-# ships ESR; Fedora's mozilla-built RPM lags upstream). Idempotent: re-runs
-# are no-ops once the remote and app are present.
+# ships ESR; Fedora's mozilla-built RPM lags upstream). ONLYOFFICE has no
+# distro package on Fedora and the upstream RPM lags; the flatpak is the
+# upstream-maintained build. Idempotent: re-runs are no-ops once the remote
+# and apps are present.
 install_flatpak_apps() {
-  log "Configuring flathub remote and installing Firefox flatpak…"
+  log "Configuring flathub remote and installing desktop flatpaks…"
   flatpak remote-add --user --if-not-exists \
     flathub https://flathub.org/repo/flathub.flatpakrepo
+
+  # Global flatpak override: deny host /tmp to every user flatpak.
+  # On WSLg, /tmp/.X11-unix is a symlink to /mnt/wslg/.X11-unix (Microsoft's
+  # X server socket dir). Any flatpak whose manifest declares
+  # `filesystems=/tmp` causes bwrap to bind-mount the host /tmp into the
+  # sandbox and then attempt a tmpfs mount on /tmp/.X11-unix to stage the
+  # X11 socket area. The symlink target /mnt/wslg/ isn't bound into the
+  # sandbox, so bwrap fails with `Can't mount tmpfs on /newroot/tmp/.X11-unix:
+  # No such file or directory` and the app exits before main(). Confirmed
+  # affected: org.onlyoffice.desktopeditors. The trigger is the /tmp
+  # filesystem permission, not the x11 socket — many seemingly-Wayland-only
+  # apps still ship with `filesystems=/tmp` for IPC. Setting this globally
+  # (no APP-ID) means any future flatpak inherits the deny and just works;
+  # apps that genuinely need /tmp would already have been broken on WSLg.
+  # `flatpak override` is idempotent — re-runs are no-ops.
+  flatpak override --user --nofilesystem=/tmp
+
   flatpak install --user --noninteractive --assumeyes \
-    flathub org.mozilla.firefox
+    flathub \
+    org.mozilla.firefox \
+    org.onlyoffice.desktopeditors
 }
 
 # Install the standard GNOME desktop app suite (Files/Nautilus, terminal,

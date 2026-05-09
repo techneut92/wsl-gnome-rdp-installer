@@ -1,5 +1,20 @@
 [Unit]
 Description=GNOME Shell (headless Wayland compositor for RDP)
+# Act as the session manager: pull in graphical-session.target so anything
+# keyed to it can run. In a normal GNOME setup, gnome-session.service does
+# this; we run gnome-shell --mode=user directly without gnome-session, so
+# nothing else activates the target. Without this, services with
+# `Requisite=graphical-session.target` (xdg-desktop-portal,
+# xdg-desktop-portal-gnome, …) refuse to start with
+# "Job xdg-desktop-portal.service/start failed with result 'dependency'",
+# which silently breaks anything in flatpak that talks to the portal —
+# Firefox "Show in Folder" (uses org.freedesktop.portal.OpenURI) and
+# Firefox dark-mode detection (reads org.freedesktop.appearance.color-scheme
+# via org.freedesktop.portal.Settings) are the symptoms we hit. The target
+# itself has RefuseManualStart=, so it must be pulled in via Wants= rather
+# than `systemctl start`.
+Wants=graphical-session.target
+Before=graphical-session.target
 
 [Service]
 Type=simple

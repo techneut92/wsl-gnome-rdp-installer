@@ -41,8 +41,63 @@ install_user_environment() {
   # restarted.
   systemctl --user set-environment \
     GALLIUM_DRIVER=d3d12 \
+    GDK_BACKEND=wayland \
     XDG_CURRENT_DESKTOP=GNOME \
     XDG_SESSION_TYPE=wayland
+}
+
+enable_appindicator_extension() {
+  # Add the AppIndicator/KStatusNotifierItem extension to the user's
+  # `enabled-extensions` list. Without it gnome-shell exposes no system
+  # tray (no StatusNotifierWatcher on the session bus); apps whose UI is
+  # tray-icon-driven — jetbrains-toolbox is the headline example — refuse
+  # to keep their main loop alive and exit silently after a feed refresh
+  # ("Application shutdown as nothing keeps us alive" in toolbox.log).
+  # The extension is installed system-wide by gnome-shell-extension-appindicator
+  # in install_packages. We just need to enable it.
+  #
+  # We write directly via gsettings rather than `gnome-extensions enable`
+  # because the latter requires gnome-shell to be running and to have
+  # already scanned the extension dir; gsettings/dconf is unaffected by
+  # shell state and the shell picks up the value on next start.
+  local uuid='appindicatorsupport@rgcjonas.gmail.com'
+  local current
+  current="$(gsettings get org.gnome.shell enabled-extensions 2>/dev/null || echo '@as []')"
+  case "$current" in
+    *"$uuid"*)
+      log "AppIndicator extension already enabled."
+      return 0
+      ;;
+  esac
+  if [ "$current" = "@as []" ] || [ "$current" = "[]" ]; then
+    gsettings set org.gnome.shell enabled-extensions "['$uuid']"
+  else
+    # current looks like `['ext1@…', 'ext2@…']` — splice the new UUID in
+    # before the closing bracket so we don't clobber any other enabled ones
+    # (Pop Shell, etc.).
+    gsettings set org.gnome.shell enabled-extensions "${current%]}, '$uuid']"
+  fi
+  log "Enabled AppIndicator extension (takes effect on next gnome-shell start)."
+}
+
+configure_wallpaper() {
+  # Fedora 44 ships GNOME's default wallpapers as JPEG-XL (.jxl) but doesn't
+  # package a gdk-pixbuf JXL loader (gdk-pixbuf2-modules-extra only contains
+  # the XPM loader; libjxl is present but no pixbuf bridge). Mutter then
+  # can't decode the default wallpaper and shows a fallback dotted-cross
+  # pattern through every workspace — looks like a "big dotted grid" over
+  # everything in the RDP session. Override picture-uri{,-dark} to the
+  # vnc-{l,d}.png variants which are also in /usr/share/backgrounds/gnome
+  # and which gdk-pixbuf decodes via the built-in PNG loader. Idempotent.
+  local light='file:///usr/share/backgrounds/gnome/vnc-l.png'
+  local dark='file:///usr/share/backgrounds/gnome/vnc-d.png'
+  if [ ! -f "${light#file://}" ]; then
+    log "vnc-l.png wallpaper not present; skipping wallpaper override."
+    return 0
+  fi
+  log "Setting wallpaper to vnc-{l,d}.png (gnome-backgrounds JXL has no Fedora pixbuf loader)…"
+  gsettings set org.gnome.desktop.background picture-uri      "$light"
+  gsettings set org.gnome.desktop.background picture-uri-dark "$dark"
 }
 
 install_systemd_units() {

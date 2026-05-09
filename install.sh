@@ -98,7 +98,9 @@ ensure_user_dbus                   # /run/user setup + dbus polling
 prompt_credentials
 ensure_tls_cert                    # winpr-makecert if available, else openssl
 configure_grd                      # grdctl --headless settings
-install_user_environment           # ~/.config/environment.d/10-wsl-gpu.conf
+install_user_environment           # ~/.config/environment.d/*.conf
+enable_appindicator_extension      # tray support for jetbrains-toolbox & friends
+configure_wallpaper                # bypass Fedora's missing JXL pixbuf loader
 install_systemd_units              # write + enable + restart
 install_pop_shell                  # build + enable Pop Shell tiling extension
 verify_and_print_summary

@@ -115,11 +115,21 @@ install_pop_shell() {
   # too — restart it after gnome-shell is back. Drops any in-progress RDP
   # session, but the installer's running in a pts shell, not RDP.
   if systemctl --user is-active --quiet gnome-shell-headless.service; then
+    # Each gnome-extensions list call goes through dbus to
+    # org.gnome.Shell.Extensions. While gnome-shell is restarting,
+    # the dbus name isn't claimed yet — the call BLOCKS until either
+    # gnome-shell registers (good) or dbus's default 25s reply timeout
+    # fires (bad: locks the loop for half a minute per iteration).
+    # Wrap each call in `timeout 2` so the poll never stalls more
+    # than 2s waiting for one dbus reply, and bound the overall wait
+    # at 30s. RuntimeMaxSec on the spinner ui makes a stuck spinner
+    # visible to the operator.
     ui_spin "Restart gnome-shell-headless to pick up Pop Shell" bash -c '
       set -e
       systemctl --user restart gnome-shell-headless.service
-      for i in $(seq 1 15); do
-        if gnome-extensions list 2>/dev/null | grep -qx "'"$POP_SHELL_UUID"'"; then
+      for i in $(seq 1 30); do
+        if timeout 2 gnome-extensions list 2>/dev/null \
+             | grep -qx "'"$POP_SHELL_UUID"'"; then
           break
         fi
         sleep 1
@@ -128,9 +138,10 @@ install_pop_shell() {
     '
   fi
 
-  if gnome-extensions list 2>/dev/null | grep -qx "$POP_SHELL_UUID"; then
-    gnome-extensions enable "$POP_SHELL_UUID" 2>/dev/null || true
-    if gnome-extensions info "$POP_SHELL_UUID" 2>/dev/null | grep -q '^[[:space:]]*Enabled: Yes'; then
+  if timeout 5 gnome-extensions list 2>/dev/null | grep -qx "$POP_SHELL_UUID"; then
+    timeout 5 gnome-extensions enable "$POP_SHELL_UUID" 2>/dev/null || true
+    if timeout 5 gnome-extensions info "$POP_SHELL_UUID" 2>/dev/null \
+         | grep -q '^[[:space:]]*Enabled: Yes'; then
       ui_ok "Pop Shell enabled"
     else
       ui_warn "Pop Shell installed but not enabled"

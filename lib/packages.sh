@@ -1,0 +1,93 @@
+# lib/packages.sh — install distro-appropriate packages.
+
+install_packages() {
+  log "Installing packages for $DISTRO_FAMILY…"
+  case "$DISTRO_FAMILY" in
+    fedora-like)
+      # gnome-remote-desktop pulls freerdp-libs as a dep. We don't add the
+      # `freerdp` binary package: openssl handles cert generation on every
+      # tested distro, and gnome-remote-desktop's own daemon validates certs
+      # via libfreerdp at runtime. git/make/nodejs/typescript are pulled
+      # in for the Pop Shell build (lib/pop_shell.sh).
+      sudo dnf install -y \
+        gnome-remote-desktop \
+        gnome-shell \
+        mutter \
+        openssl \
+        flatpak \
+        git \
+        make \
+        nodejs \
+        typescript >/dev/null
+      ;;
+    debian-like)
+      export DEBIAN_FRONTEND=noninteractive
+      sudo apt-get update -qq
+      sudo apt-get install -y --no-install-recommends \
+        gnome-remote-desktop \
+        gnome-shell \
+        mutter \
+        openssl \
+        dbus-user-session \
+        flatpak \
+        git \
+        make \
+        nodejs \
+        node-typescript >/dev/null
+      ;;
+    *)
+      die "install_packages: unsupported family $DISTRO_FAMILY"
+      ;;
+  esac
+
+  if [ "${INSTALL_DESKTOP:-1}" = "1" ]; then
+    install_desktop_apps
+    install_flatpak_apps
+  else
+    log "Skipping full GNOME desktop apps (-m / INSTALL_DESKTOP=0)."
+  fi
+}
+
+# Set up flathub (per-user remote, no sudo) and install Firefox as a flatpak.
+# We prefer flatpak Firefox over the distro package so the same install.sh
+# produces the same browser experience on Fedora and Debian-likes (Debian
+# ships ESR; Fedora's mozilla-built RPM lags upstream). Idempotent: re-runs
+# are no-ops once the remote and app are present.
+install_flatpak_apps() {
+  log "Configuring flathub remote and installing Firefox flatpak…"
+  flatpak remote-add --user --if-not-exists \
+    flathub https://flathub.org/repo/flathub.flatpakrepo
+  flatpak install --user --noninteractive --assumeyes \
+    flathub org.mozilla.firefox
+}
+
+# Install the standard GNOME desktop app suite (Files/Nautilus, terminal,
+# text editor, calculator, system monitor, etc.). The minimal install_packages
+# above only gives you gnome-shell + mutter, which is a working compositor but
+# leaves the app grid empty. Idempotent on re-run.
+install_desktop_apps() {
+  log "Installing full GNOME desktop apps…"
+  case "$DISTRO_FAMILY" in
+    fedora-like)
+      # `gnome-desktop` is the Fedora group ID for the GNOME Desktop Environment
+      # (apps + settings panels). Distinct from the gnome-desktop3/4 shared libs.
+      sudo dnf group install -y gnome-desktop >/dev/null
+      ;;
+    debian-like)
+      # gnome-core = Files, gnome-terminal, text editor, calculator, etc.
+      # Avoiding the `gnome` metapackage which would pull in LibreOffice, games,
+      # and other things that don't belong on a WSL session.
+      export DEBIAN_FRONTEND=noninteractive
+      sudo apt-get install -y gnome-core >/dev/null
+      ;;
+  esac
+}
+
+enable_lingering() {
+  if loginctl show-user "$USER" 2>/dev/null | grep -q '^Linger=yes$'; then
+    log "User lingering already enabled."
+    return 0
+  fi
+  log "Enabling user lingering for $USER (services keep running after logout)…"
+  sudo loginctl enable-linger "$USER"
+}

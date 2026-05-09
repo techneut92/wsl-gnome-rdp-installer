@@ -1,0 +1,22 @@
+[Unit]
+Description=Detach WSLg PulseAudio symlink so pipewire-pulse can bind
+# WSL's /init pre-creates /run/user/$UID/pulse as a symlink to
+# /mnt/wslg/runtime-dir/pulse. That target is owned by UID 1000 (WSLg's
+# hardcoded assumption). When we run as a renumbered UID — see
+# lib/cgroup_collision.sh, which moves dylan to 1001+ to dodge the
+# multi-distro cgroup collision — we no longer own that path, so
+# pipewire-pulse.socket fails to bind /run/user/$UID/pulse/native
+# with EACCES, install.sh exits "Job failed", and audio over RDP is
+# broken. This unit replaces the symlink with a real, writable dir
+# only when the symlink target isn't usable; on a non-renumbered distro
+# it's a no-op (both Condition + the inline writability check guard it).
+ConditionPathIsSymbolicLink=%t/pulse
+Before=pipewire-pulse.socket pipewire-pulse.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'if ! [ -w "%t/pulse/" ] 2>/dev/null; then rm -f "%t/pulse" && mkdir -m 700 "%t/pulse"; fi'
+
+[Install]
+WantedBy=default.target

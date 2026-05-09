@@ -1,0 +1,27 @@
+[Unit]
+Description=GNOME Shell (headless Wayland compositor for RDP)
+
+[Service]
+Type=simple
+Environment="WAYLAND_DISPLAY=wayland-grd"
+Environment="XDG_SESSION_TYPE=wayland"
+Environment="XDG_CURRENT_DESKTOP=GNOME"
+# Force Mesa's gallium d3d12 driver so mutter's surfaceless EGL renders on
+# the GPU (Mesa→D3D12→DXG→host driver) instead of llvmpipe. Verified:
+#   GALLIUM_DRIVER=d3d12 eglinfo -p surfaceless
+# reports "renderer: D3D12 (NVIDIA GeForce RTX 3070 Ti)" — GL 4.6 vs the
+# software fallback's GL 4.5 llvmpipe. MESA_LOADER_DRIVER_OVERRIDE alone is
+# NOT sufficient; GALLIUM_DRIVER is the env Mesa actually honours for
+# surfaceless EGL device selection on WSL2. Note: the EGL device still
+# advertises EGL_MESA_device_software (because there's no /dev/dri behind
+# it) and returns a NULL DRM render-node string, but the GL pipeline itself
+# is hardware. Drop this var to revert to llvmpipe if d3d12 ever regresses.
+Environment="GALLIUM_DRIVER=d3d12"
+# No --virtual-monitor: the RDP client supplies the monitor(s) on connect.
+# This way the client's monitor becomes primary so the GNOME panel is visible.
+ExecStart=/usr/bin/env gnome-shell --wayland --no-x11 --headless --wayland-display wayland-grd --mode=user
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

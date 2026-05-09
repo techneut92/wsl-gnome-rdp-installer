@@ -150,7 +150,9 @@ expose_user_flatpaks_to_wslg() {
   if [ "$linked" -gt 0 ]; then
     ui_ok "Linked $linked flatpak .desktop entries"
     ui_detail "$dst → $src"
-    ui_detail "run 'wsl -t <distro>' from Windows to refresh Start Menu"
+    # Drives the "distro restart needed" hint in verify_and_print_summary.
+    # WSLg only walks the .desktop scan paths at distro startup.
+    export FLATPAKS_NEWLY_LINKED=1
   else
     ui_skip "All $already flatpak .desktop entries already exposed"
   fi

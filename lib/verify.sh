@@ -42,25 +42,36 @@ verify_and_print_summary() {
     exit 1
   fi
 
-  # Did this run modify supplementary groups (renderd added video+render)?
-  # If so, the user's existing wsl shell + already-running user@$UID.service
-  # don't have them yet. A fresh logind session is the only way to refresh
-  # — `wsl -t <distro>` from Windows is the cleanest path.
-  local groups_hint=""
-  if [ "${RENDERD_GROUPS_ADDED:-0}" = "1" ]; then
+  # Build a single "needs distro restart" hint listing every change
+  # made this run that won't take effect until a fresh distro start:
+  #
+  #   - renderd added video+render groups → existing user@$UID.service
+  #     and the user's wsl shell carry the OLD supplementary groups
+  #     (Mesa probing /dev/dri/* sees EACCES)
+  #   - flatpak .desktop symlinks added → WSLg only publishes Start
+  #     Menu shortcuts at distro startup
+  #
+  # `wsl -t <distro>` from a Windows shell is the cleanest single
+  # action that resolves both. Print only the reasons that actually
+  # apply this run; quiet on no-op re-runs.
+  local groups_hint="" reasons=()
+  [ "${RENDERD_GROUPS_ADDED:-0}" = "1" ] \
+    && reasons+=("video+render groups added — Mesa needs them to open /dev/dri/*")
+  [ "${FLATPAKS_NEWLY_LINKED:-0}" = "1" ] \
+    && reasons+=("flatpak Start Menu shortcuts added — WSLg only publishes at distro startup")
+  if [ "${#reasons[@]}" -gt 0 ]; then
     local distro
     distro=$(awk -F= '$1=="WSL_DISTRO_NAME" {print $2}' /proc/$$/environ 2>/dev/null \
              | tr -d '\0' \
              | head -1)
     [ -z "$distro" ] && distro=$(printenv WSL_DISTRO_NAME 2>/dev/null)
     [ -z "$distro" ] && distro="<distro>"
-    groups_hint=$(cat <<EOH
-
-  ⚠ video + render group added to $USER — required for /dev/dri/*
-    To pick it up: from a Windows shell, run  wsl -t $distro
-    Then reopen WSL and re-mstsc.
-EOH
-)
+    groups_hint=$'\n\n  ⚠ Distro restart needed to pick up:'
+    local r
+    for r in "${reasons[@]}"; do
+      groups_hint+=$'\n    - '"$r"
+    done
+    groups_hint+=$'\n    From a Windows shell:  wsl -t '"$distro"$'\n    Then reopen WSL.'
   fi
 
   cat <<EOF

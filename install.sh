@@ -260,35 +260,27 @@ prompt_all_settings
 
 ui_phase "Host setup"
 install_packages                   # uses DISTRO_FAMILY + INSTALL_DESKTOP/INSTALL_FLATPAK
+# Kernel modules (vgem+vkms) up front, alongside packages, so /dev/dri
+# is fully populated before gnome-shell-headless first starts and so
+# the video+render group additions land before lingering kicks user
+# services off in their long-lived form. Cheap on the happy path
+# (~5–10s prebuilt download), bounded on the cold path (~60–90s local
+# build) — the prompt warned the user about the cold path up-front.
+[ "${INSTALL_RENDERD:-0}" = "1" ] && install_renderd_kernel
 enable_lingering                   # safe now: user@$UID.service is healthy
 ensure_user_dbus                   # /run/user setup + dbus polling
 
-ui_phase "TLS cert"
-ensure_tls_cert                    # winpr-makecert if available, else openssl
-
 ui_phase "RDP services"
+ensure_tls_cert                    # winpr-makecert if available, else openssl
 configure_grd                      # grdctl --headless settings
 install_user_environment           # ~/.config/environment.d/*.conf
 [ "${INSTALL_APPINDICATOR:-1}" = "1" ] && enable_appindicator_extension
 install_wslinterop_binfmt          # /etc/binfmt.d/WSLInterop.conf — keep .exe interop alive across shutdowns
 install_x11_unix_fix               # /etc/systemd/system/wslg-x11-unix-fix.service
 install_systemd_units              # write + enable + restart
-
-if [ "${INSTALL_POP_SHELL:-1}" = "1" ]; then
-  ui_phase "Tiling extension"
-  install_pop_shell                # build + enable Pop Shell tiling extension
-fi
+[ "${INSTALL_POP_SHELL:-1}" = "1" ] && install_pop_shell
 
 ui_phase "Verification"
 verify_and_print_summary
-
-# Optional, opt-in — runs LAST so it's the final thing the user sees.
-# RDP setup is already verified at this point; even if the kernel build
-# fails, they have a working desktop. Gated on INSTALL_RENDERD, which the
-# upfront prompt set.
-if [ "${INSTALL_RENDERD:-0}" = "1" ]; then
-  ui_phase "Optional: custom kernel"
-  install_renderd_kernel
-fi
 
 # vim: set ts=2 sw=2 et:

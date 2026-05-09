@@ -96,9 +96,12 @@ install_pop_shell() {
   if [ "$make_rc" -eq 0 ]; then
     printf '\r  %s✓%s Build + local-install\033[K\n' "$UI_GREEN" "$UI_RESET"
   elif [ -f "$meta" ]; then
-    printf '\r  %s⚠%s Build + local-install\033[K\n' "$UI_YELLOW" "$UI_RESET"
-    ui_detail "extension files staged; trailing 'gnome-extensions enable'"
-    ui_detail "failed (expected on Wayland) — recovery follows"
+    # `make local-install` on Wayland always trails with a failed
+    # `gnome-extensions enable` (no usable dbus connection from the
+    # make recipe). The build itself succeeded — extension files are
+    # staged. We re-attempt enable after restarting gnome-shell-headless
+    # below. Mark this step ✓; the recovery surfaces its own status.
+    printf '\r  %s✓%s Build + local-install\033[K\n' "$UI_GREEN" "$UI_RESET"
   else
     printf '\r  %s✗%s Build + local-install\033[K\n' "$UI_RED" "$UI_RESET"
     tail -10 "$make_log" 2>/dev/null | sed 's/^/    /' >&2

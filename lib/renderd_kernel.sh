@@ -417,6 +417,13 @@ renderd_add_user_groups() {
   ui_spin "Add $USER to video + render groups" \
     sudo usermod -aG video,render "$USER"
   ui_detail "effective on next login"
+  # Signal the summary block to print a "wsl -t" hint at the end.
+  # /etc/group is updated, but the running shell + already-started
+  # user@$UID.service still have the old supplementary groups baked
+  # in until pam_systemd creates a fresh session. Mesa probing
+  # /dev/dri/* from the existing gnome-shell will see EACCES until
+  # then.
+  export RENDERD_GROUPS_ADDED=1
 }
 
 # Clean uninstall path — fired when the user de-selects the renderd

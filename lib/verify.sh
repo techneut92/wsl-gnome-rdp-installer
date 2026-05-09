@@ -42,6 +42,27 @@ verify_and_print_summary() {
     exit 1
   fi
 
+  # Did this run modify supplementary groups (renderd added video+render)?
+  # If so, the user's existing wsl shell + already-running user@$UID.service
+  # don't have them yet. A fresh logind session is the only way to refresh
+  # — `wsl -t <distro>` from Windows is the cleanest path.
+  local groups_hint=""
+  if [ "${RENDERD_GROUPS_ADDED:-0}" = "1" ]; then
+    local distro
+    distro=$(awk -F= '$1=="WSL_DISTRO_NAME" {print $2}' /proc/$$/environ 2>/dev/null \
+             | tr -d '\0' \
+             | head -1)
+    [ -z "$distro" ] && distro=$(printenv WSL_DISTRO_NAME 2>/dev/null)
+    [ -z "$distro" ] && distro="<distro>"
+    groups_hint=$(cat <<EOH
+
+  ⚠ video + render group added to $USER — required for /dev/dri/*
+    To pick it up: from a Windows shell, run  wsl -t $distro
+    Then reopen WSL and re-mstsc.
+EOH
+)
+  fi
+
   cat <<EOF
 
 ================================================================
@@ -66,7 +87,7 @@ verify_and_print_summary() {
   Logs:
     journalctl --user -u gnome-shell-headless.service -f
     journalctl --user -u gnome-remote-desktop-headless.service -f
-
+$groups_hint
   Re-run install.sh any time to update the config / credentials.
 ================================================================
 EOF

@@ -115,11 +115,10 @@ install_flatpak_apps() {
 }
 
 # WSLg's Start-Menu publisher (runs at distro startup, generates Windows
-# .lnk shortcuts under "Apps → <distro>") scans only /usr/share/applications.
-# Microsoft's docs claim ~/.local/share/applications is also walked, but
-# empirically it isn't — the per-distro Start Menu folder under
-# %AppData%\Microsoft\Windows\Start Menu\Programs\<distro> contains
-# entries from /usr/share only (verified on a fresh FedoraTest 2026-05-09).
+# .lnk shortcuts under "Apps → <distro>") scans only /usr/share/applications,
+# and only reads regular files — symlinks are silently skipped. Microsoft's
+# docs claim ~/.local/share/applications is also walked + symlinks are
+# resolved; empirically (WSL 2.7.3.0, 2026-05-09) neither is true.
 #
 # `flatpak install --user` writes its .desktop files to
 # ~/.local/share/flatpak/exports/share/applications/ — XDG-visible to
@@ -127,11 +126,12 @@ install_flatpak_apps() {
 # WSLg's publisher. Same goes for icons in
 # ~/.local/share/flatpak/exports/share/icons/.
 #
-# Symlink the per-app .desktop files into /usr/share/applications and
+# COPY the per-app .desktop files into /usr/share/applications and
 # mirror the per-app icon tree into /usr/share/icons/hicolor/.../apps/
-# so WSLg finds both. Symlinks (not copies) keep flatpak the source of
-# truth — upstream-bumped Exec lines + new icon sizes flow through
-# without re-running this step.
+# (regular files, not symlinks). This means flatpak version-bumps that
+# rewrite the .desktop won't auto-flow through — but that's the same
+# tradeoff every other system-managed file in this installer makes,
+# and an install.sh re-run rewrites it cleanly.
 #
 # WSLg only republishes at distro startup; surfaces in the verify hint
 # via FLATPAKS_NEWLY_LINKED=1 so the user knows to `wsl -t <distro>`.
@@ -141,43 +141,48 @@ expose_user_flatpaks_to_wslg() {
   [ -d "$src" ] || return 0
   ui_step "Expose flatpaks to Windows Start Menu (WSLg)"
 
-  local f base linked=0 already=0
+  local f base copied=0 already=0
   for f in "$src"/*.desktop; do
     [ -e "$f" ] || continue
     base=$(basename "$f")
-    if [ -L "$dst/$base" ] && [ "$(readlink -f "$dst/$base")" = "$(readlink -f "$f")" ]; then
+    # Regular file at dest with identical content → already in place.
+    if [ -f "$dst/$base" ] && [ ! -L "$dst/$base" ] \
+       && cmp -s "$f" "$dst/$base"; then
       already=$((already + 1))
       continue
     fi
-    sudo ln -sfn "$f" "$dst/$base"
-    linked=$((linked + 1))
+    sudo rm -f "$dst/$base"
+    sudo install -m 644 "$f" "$dst/$base"
+    copied=$((copied + 1))
   done
 
-  # Mirror per-app icons (hicolor tree) into /usr/share/icons. WSLg's
-  # publisher embeds the icon into the .lnk shortcut by reading
-  # standard XDG icon paths. Without this, Start Menu entries get a
-  # generic Linux icon. Per-file symlinks because we don't want to
-  # shadow the whole hicolor tree — only the two app-prefixed entries.
+  # Mirror per-app icons (hicolor tree) into /usr/share/icons. WSLg
+  # embeds the icon into the .lnk shortcut by walking standard XDG
+  # icon paths. Without this, Start Menu entries get a generic Linux
+  # icon. Same regular-file rule applies — copies, not symlinks.
+  # Scoped to org.mozilla.firefox* and org.onlyoffice.desktopeditors*
+  # so we don't shadow other parts of the hicolor tree.
   local icon_src="$HOME/.local/share/flatpak/exports/share/icons"
   local icon_dst="/usr/share/icons"
-  local icon
   if [ -d "$icon_src" ]; then
+    local icon
     while IFS= read -r icon; do
       local rel="${icon#"$icon_src/"}"
       local target="$icon_dst/$rel"
-      if [ -L "$target" ] && [ "$(readlink -f "$target")" = "$(readlink -f "$icon")" ]; then
+      if [ -f "$target" ] && [ ! -L "$target" ] && cmp -s "$icon" "$target"; then
         continue
       fi
+      sudo rm -f "$target"
       sudo install -d "$(dirname "$target")"
-      sudo ln -sfn "$icon" "$target"
+      sudo install -m 644 "$icon" "$target"
     done < <(find "$icon_src" -type l \
                   \( -name 'org.mozilla.firefox*' \
                   -o -name 'org.onlyoffice.desktopeditors*' \) 2>/dev/null)
   fi
 
-  if [ "$linked" -gt 0 ]; then
-    ui_ok "Linked $linked flatpak .desktop entries (+ icons)"
-    ui_detail "$dst → $src"
+  if [ "$copied" -gt 0 ]; then
+    ui_ok "Copied $copied flatpak .desktop entries (+ icons)"
+    ui_detail "$dst (copies of $src/*)"
     # Drives the "distro restart needed" hint in verify_and_print_summary.
     export FLATPAKS_NEWLY_LINKED=1
   else

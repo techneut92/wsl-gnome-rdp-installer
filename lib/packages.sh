@@ -69,6 +69,21 @@ install_packages() {
 # and apps are present.
 install_flatpak_apps() {
   ui_step "Flatpak desktop apps"
+
+  # Initialize the SYSTEM flatpak installation too — even though we
+  # install our apps per-user. Without /var/lib/flatpak/repo on disk,
+  # bare `flatpak run <appid>` (which is what every flatpak .desktop
+  # file's Exec= line resolves to) fails with `error: While opening
+  # repository /var/lib/flatpak/repo: opening repo: opendir(...) No
+  # such file or directory` and the launch exits 1. This breaks
+  # gnome-shell-launched flatpaks (the dash doesn't pass --user; the
+  # .desktop file doesn't either). Adding a remote with --if-not-exists
+  # initializes the repo as a side-effect — empty is fine, our apps
+  # still resolve from the user installation.
+  ui_spin "Add flathub remote (--system, init repo)" \
+    sudo flatpak remote-add --system --if-not-exists \
+      flathub https://flathub.org/repo/flathub.flatpakrepo
+
   ui_spin "Add flathub remote (--user)" \
     flatpak remote-add --user --if-not-exists \
       flathub https://flathub.org/repo/flathub.flatpakrepo

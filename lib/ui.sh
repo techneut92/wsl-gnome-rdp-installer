@@ -266,9 +266,13 @@ ui_multiselect() {
   trap - EXIT INT TERM
 
   # Output selected tags on stdout for the caller's $( ) capture.
+  # Explicit `return 0` because if the last item is OFF, the loop's
+  # exit code is the failing `[` test from the && short-circuit, and
+  # ui_multiselect would falsely report cancelled to the caller.
   for ((i=0; i<n; i++)); do
     [ "${states[i]}" = "ON" ] && printf '%s\n' "${tags[i]}"
   done
+  return 0
 }
 
 # --- inline spinner -------------------------------------------------

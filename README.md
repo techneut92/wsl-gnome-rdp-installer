@@ -177,7 +177,7 @@ This installer detects the collision (foreign-PID-namespace processes show as `0
 
 - Picks the next free UID by scanning **both** `/etc/passwd` *and* the shared cgroup tree, so 3+ distros don't collide.
 - Updates `/etc/wsl.conf` to `[user]default=$USERNAME` so the WSL launcher resolves your user by name (renumber-proof; otherwise `wsl -d <distro>` calls `getpwuid(OLD_UID)` → fails → drops you into root).
-- Ships `units/wslg-pulse-detach.service` to detach WSLg's pre-created `/run/user/$UID/pulse → /mnt/wslg/runtime-dir/pulse` symlink (which is mode `0700` UID 1000, hardcoded by Microsoft) so `pipewire-pulse.socket` can bind on a renumbered UID.
+- Relies on the sibling [wsl-qol](https://github.com/techneut92/wsl-qol) repo's `wslg-pulse-detach.service` (auto-installed by the bootstrap phase) to detach WSLg's pre-created `/run/user/$UID/pulse → /mnt/wslg/runtime-dir/pulse` symlink (mode `0700` UID 1000, hardcoded by Microsoft) so `pipewire-pulse.socket` can bind on a renumbered UID.
 
 The flow:
 

@@ -157,8 +157,6 @@ install_systemd_units() {
   install -m 644 "$PROJECT_ROOT/units/gnome-remote-desktop-headless.override.conf" \
                  "$SYSTEMD_USER_DIR/gnome-remote-desktop-headless.service.d/override.conf"
 
-  install -m 644 "$PROJECT_ROOT/units/wslg-pulse-detach.service" \
-                 "$SYSTEMD_USER_DIR/wslg-pulse-detach.service"
   ui_ok "Write unit files"
   ui_detail "$SYSTEMD_USER_DIR"
 
@@ -170,14 +168,10 @@ install_systemd_units() {
       pipewire-pulse.socket 2>/dev/null || true
   '
 
-  # WSLg pre-symlinks /run/user/$UID/pulse → /mnt/wslg/runtime-dir/pulse,
-  # which is mode 0700 owned by UID 1000. On a renumbered UID (see
-  # lib/cgroup_collision.sh) we can't bind that socket. Enable + run our
-  # detach unit BEFORE pipewire-pulse.socket so the latter can bind. The
-  # unit is a no-op when the WSLg target is writable (i.e. the dylan=1000
-  # case on the first distro).
-  ui_spin "Enable wslg-pulse-detach.service" \
-    systemctl --user enable --now wslg-pulse-detach.service
+  # wsl-qol's install_wslg_pulse_detach already enabled
+  # wslg-pulse-detach.service earlier in this run (see
+  # bootstrap_wsl_qol). It runs `Before=pipewire-pulse.socket` and
+  # is a no-op on a UID-1000 distro, so nothing else to do here.
 
   # PipeWire + WirePlumber are required by gnome-remote-desktop for screen
   # capture. They auto-start on graphical login but NOT in a headless + linger

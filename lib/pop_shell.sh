@@ -76,8 +76,9 @@ install_pop_shell() {
   # partial failure. Instead, manage the spinner ourselves and downgrade
   # to ⚠ (with the recovery hint) when the post-install check shows the
   # extension files were staged successfully — a real make failure
-  # (no metadata.json) still renders ✗.
-  ui_step "Build + local-install"
+  # (no metadata.json) still renders ✗. No ui_step header for this
+  # sub-step — it folds under "Pop Shell tiling extension" alongside
+  # the clone + restart bullets.
   local make_log; make_log=$(mktemp)
   local make_rc=0
   make -C "$POP_SHELL_SRC" local-install >"$make_log" 2>&1 &

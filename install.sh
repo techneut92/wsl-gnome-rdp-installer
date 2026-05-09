@@ -275,6 +275,7 @@ ensure_tls_cert                    # winpr-makecert if available, else openssl
 configure_grd                      # grdctl --headless settings
 install_user_environment           # ~/.config/environment.d/*.conf
 install_xdg_user_dirs              # ~/Downloads, ~/Documents, ~/Pictures, … (xdg-user-dirs-update)
+sync_gnome_theme_with_windows      # mirror Windows AppsUseLightTheme → GNOME color-scheme
 [ "${INSTALL_APPINDICATOR:-1}" = "1" ] && enable_appindicator_extension
 install_wslinterop_binfmt          # /etc/binfmt.d/WSLInterop.conf — keep .exe interop alive across shutdowns
 install_x11_unix_fix               # /etc/systemd/system/wslg-x11-unix-fix.service

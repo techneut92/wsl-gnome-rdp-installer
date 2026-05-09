@@ -111,6 +111,16 @@ install_flatpak_apps() {
       org.mozilla.firefox \
       org.onlyoffice.desktopeditors
 
+  # ONLYOFFICE Desktop Editors is a CEF/Chromium app, not Qt. Without
+  # XCURSOR_SIZE pinned its cursor renders at ~4x the right size on a
+  # mutter+RDP session because Chromium's Xwayland fallback fetches an
+  # XCURSOR_SIZE that mutter has scaled up for HiDPI logical-monitor
+  # math. Firefox doesn't hit it because it uses native Wayland cursors.
+  # Pin to GNOME's default cursor-size (24).
+  ui_spin "Override ONLYOFFICE cursor size: XCURSOR_SIZE=24" \
+    flatpak override --user --env=XCURSOR_SIZE=24 \
+      org.onlyoffice.desktopeditors
+
   expose_user_flatpaks_to_wslg
 }
 

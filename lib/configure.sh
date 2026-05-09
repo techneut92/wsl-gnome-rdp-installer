@@ -52,6 +52,49 @@ install_user_environment() {
       XDG_SESSION_TYPE=wayland
 }
 
+sync_gnome_theme_with_windows() {
+  # Bridge Windows' light/dark mode → GNOME's color-scheme + gtk-theme
+  # at install time. WSLg doesn't propagate Windows theme to Linux apps,
+  # so a fresh GNOME session always comes up in the default light theme
+  # even when Windows is in dark mode. Read Windows' registry once via
+  # reg.exe interop and set GNOME accordingly. Apps that gate on the
+  # XDG color-scheme portal (Firefox, GNOME apps) follow immediately.
+  #
+  # Static one-shot: if the user toggles Windows theme later, run
+  # install.sh again or call gsettings directly. (A dynamic poll/timer
+  # would be nicer but adds a moving part for marginal value.)
+  ui_step "Mirror Windows theme into GNOME"
+  if ! command -v gsettings >/dev/null 2>&1; then
+    ui_skip "gsettings not available"
+    return 0
+  fi
+  if ! command -v reg.exe >/dev/null 2>&1; then
+    ui_skip "reg.exe not on PATH (interop unavailable)"
+    return 0
+  fi
+  # `AppsUseLightTheme` is the relevant value: 1 = light, 0 = dark.
+  # SystemUsesLightTheme controls Win11 taskbar colour and is a
+  # separate axis users sometimes set differently.
+  local val scheme gtk
+  val=$(reg.exe query \
+          'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' \
+          /v AppsUseLightTheme 2>/dev/null \
+        | awk '/AppsUseLightTheme/{print $NF}' \
+        | tr -d '\r')
+  case "$val" in
+    0x0) scheme=prefer-dark; gtk=Adwaita-dark ;;
+    0x1) scheme=default;     gtk=Adwaita      ;;
+    *)
+      ui_skip "Windows theme indeterminate (AppsUseLightTheme=$val)"
+      return 0
+      ;;
+  esac
+  gsettings set org.gnome.desktop.interface color-scheme "$scheme"
+  gsettings set org.gnome.desktop.interface gtk-theme    "$gtk"
+  ui_ok "Set color-scheme=$scheme + gtk-theme=$gtk"
+  ui_detail "Windows AppsUseLightTheme=$val → matched"
+}
+
 install_xdg_user_dirs() {
   # Standard ~/Downloads, ~/Documents, ~/Pictures, ~/Music, ~/Videos,
   # ~/Desktop, ~/Templates, ~/Public. On a normal GNOME box these are

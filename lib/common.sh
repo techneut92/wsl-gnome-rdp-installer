@@ -17,6 +17,56 @@ log()  { ui_step "$*"; }
 warn() { ui_warn "$*"; }
 die()  { ui_err  "$*"; exit 1; }
 
+# Identify the WSLg primary host GPU by inspecting which Windows driver INF
+# directory got mirrored into /usr/lib/wsl/drivers/. Reliable because WSLg
+# only mirrors the driver package backing the adapter it exposes via dxgkrnl:
+#   iigd_dch.inf_*  → Intel iGPU (UHD/Iris Xe/Arc Xe — incl. Meteor Lake)
+#   nv_*.inf_*      → NVIDIA  (nv_dispi, nvlt, nvltwu, nv_oem*…)
+#   u*amd*.inf_*    → AMD/Radeon (u0335006, u0341423, etc.)
+# Echoes one of: intel | nvidia | amd | unknown.
+host_gpu_vendor() {
+  local d
+  for d in /usr/lib/wsl/drivers/*/; do
+    [ -d "$d" ] || continue
+    case "$(basename "$d")" in
+      iigd_*|igdlh*|ki12*|ki13*) echo intel ; return 0 ;;
+      nv_*|nvlt*|nvm*)            echo nvidia; return 0 ;;
+      u*amd*|amdkmpfd*|u033*|u034*|u041*) echo amd; return 0 ;;
+    esac
+  done
+  echo unknown
+}
+
+# Pick a Mesa Gallium driver for the compositor + user-session apps.
+#
+# WSL_RDP_GALLIUM_DRIVER overrides; otherwise auto-detect by host GPU.
+#   d3d12     — Mesa → D3D12 → DXG → host driver. Hardware-accelerated.
+#               Verified on NVIDIA. Produces a broken EGL/GBM surface on
+#               Intel Arc Xe (Meteor Lake) — gnome-shell paints into a
+#               context that never reaches the RDP capture path, so the
+#               client sees a black screen with only the cursor visible.
+#               Opening the D3D12 device on the shared iGPU adapter can
+#               also briefly knock Windows DWM into recovery (host
+#               wallpaper goes black).
+#   llvmpipe  — software rasterizer. Slower, always correct.
+#   auto      — Intel → llvmpipe ; NVIDIA/AMD/unknown → d3d12.
+#
+# Echoes the chosen driver string.
+pick_gallium_driver() {
+  local override="${WSL_RDP_GALLIUM_DRIVER:-auto}"
+  case "$override" in
+    d3d12|llvmpipe|softpipe|swrast) echo "$override"; return 0 ;;
+    auto) ;;
+    *)
+      ui_warn "Unknown WSL_RDP_GALLIUM_DRIVER='$override' — falling back to auto"
+      ;;
+  esac
+  case "$(host_gpu_vendor)" in
+    intel) echo llvmpipe ;;
+    *)     echo d3d12 ;;
+  esac
+}
+
 detect_distro() {
   [ -f /etc/os-release ] || die "/etc/os-release missing — can't detect distro"
   # shellcheck disable=SC1091

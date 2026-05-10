@@ -42,6 +42,16 @@ pre-checked/unchecked:
 
 AppIndicator extension is mandatory (always installed) — needed for
 tray-icon apps like jetbrains-toolbox.
+
+Compositor GPU path:
+  WSL_RDP_GALLIUM_DRIVER=auto|d3d12|llvmpipe   (default: auto)
+
+    auto     — d3d12 on NVIDIA/AMD, llvmpipe on Intel iGPU. d3d12 is
+               hardware-accelerated (Mesa→D3D12→DXG→host driver) but
+               renders a broken/black surface on Intel Arc Xe
+               (Meteor Lake), so we fall back to the software path
+               there. Use 'd3d12' to force HW; use 'llvmpipe' if you
+               see a black-screen-with-cursor over RDP.
 EOF
 }
 

@@ -13,9 +13,11 @@ mstsc /v:localhost:3390  ─── RDP ───▶ gnome-remote-desktop-daemon 
                                               │  Wayland (wayland-grd)
                                               ▼
                                        gnome-shell --headless --mode=user
-                                              │  GALLIUM_DRIVER=d3d12
+                                              │  GALLIUM_DRIVER=d3d12 (NVIDIA/AMD)
+                                              │  GALLIUM_DRIVER=llvmpipe (Intel iGPU)
                                               ▼
                                        Mesa → D3D12 → DXG → host GPU
+                                       (or pure software on Intel — see below)
 ```
 
 Multi-monitor works out of the box (`mstsc /multimon`) — `gnome-shell` is started without `--virtual-monitor`, so the RDP client supplies the monitor geometry on connect.
@@ -111,7 +113,7 @@ Set any `INSTALL_*` env var to `0`/`1` and the matching component box in the upf
 
 - **`gnome-shell-headless.service`** (user unit): Wayland compositor + GNOME UI, attaches to the RDP session.
 - **`gnome-remote-desktop-headless.service`** (user unit): FreeRDP listener on the configured port.
-- **Hardware-accelerated mutter** via `GALLIUM_DRIVER=d3d12` — Mesa's gallium d3d12 driver routes EGL through DXG to the host GPU. Verified at GL 4.6 against a real GPU device, vs the GL 4.5 llvmpipe fallback.
+- **Hardware-accelerated mutter** via `GALLIUM_DRIVER=d3d12` — Mesa's gallium d3d12 driver routes EGL through DXG to the host GPU. Verified at GL 4.6 against a real GPU device, vs the GL 4.5 llvmpipe fallback. **Intel iGPUs (Meteor Lake Arc Xe) auto-fall-back to `llvmpipe`** — the d3d12 path produces a black-screen-with-cursor over RDP on that hardware. Override with `WSL_RDP_GALLIUM_DRIVER={auto,d3d12,llvmpipe}`.
 - **Multi-monitor RDP** via `mstsc /multimon` (no `--virtual-monitor` pinned).
 - **TLS cert** auto-generated via `winpr-makecert` (preferred) or `openssl`.
 - **User lingering** so the desktop survives shell logout.
@@ -242,7 +244,7 @@ units/
   gnome-remote-desktop-headless.override.conf  software-EGL override for grd
   wslg-x11-unix-fix.service                    sticky-bit fix for self-spawned Xwayland
 environment.d/
-  10-wsl-gpu.conf                              GALLIUM_DRIVER=d3d12 for client apps
+  10-wsl-gpu.conf                              GALLIUM_DRIVER for client apps (regenerated per host GPU)
   20-gnome-session.conf                        XDG_CURRENT_DESKTOP / SESSION_TYPE
   30-rdp-display.conf                          GDK_BACKEND=wayland (route to wayland-grd)
   40-cursor.conf                               XCURSOR_SIZE=24 for native Xwayland clients

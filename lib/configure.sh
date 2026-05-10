@@ -156,6 +156,26 @@ enable_appindicator_extension() {
   ui_detail "takes effect on next gnome-shell start"
 }
 
+apply_flatpak_sync() {
+  # Re-fire wsl-flatpak-wslg-sync now that install_packages has just
+  # `flatpak install`-ed Firefox + ONLYOFFICE. wsl-qol's
+  # initial_flatpak_sync_run runs early in bootstrap_wsl_qol — that's
+  # intentional, before our dnf step uses the flatpak base setup. But
+  # at that point ~/.local/share/flatpak/exports is empty, the
+  # initial run finds nothing, and the .timer's OnUnitActiveSec=1min
+  # only starts ticking from a service activation. Kicking the unit
+  # again here both publishes the new flatpaks to /usr/share +
+  # Start-Menu immediately and re-arms the periodic timer.
+  ui_step "Flatpak → /usr/share sync (post-packages re-fire)"
+  if ! systemctl --user list-unit-files wsl-flatpak-wslg-sync.service \
+       >/dev/null 2>&1; then
+    ui_skip "wsl-flatpak-wslg-sync.service not installed (QOL_FLATPAK_SYNC disabled?)"
+    return 0
+  fi
+  ui_spin "wsl-flatpak-wslg-sync.service" \
+    systemctl --user start --wait wsl-flatpak-wslg-sync.service
+}
+
 apply_theme_sync() {
   # Re-fire wsl-theme-sync now that the GNOME stack (and its gsettings
   # schemas) are installed. wsl-qol's own oneshot_theme_sync runs early

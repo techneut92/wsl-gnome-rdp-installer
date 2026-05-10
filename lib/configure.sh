@@ -127,23 +127,34 @@ install_xdg_user_dirs() {
 }
 
 install_projects_dir() {
-  # Add a ~/Projects folder + a Nautilus sidebar bookmark for it.
-  # Nautilus reads ~/.config/gtk-3.0/bookmarks (still the canonical
-  # path under GTK4 — the gtk-4.0 dir is for settings only) and
-  # appends entries below the XDG user-dirs section in the sidebar.
-  # Format is "<URI> [optional display name]" per line.
-  ui_step "Projects folder"
-  local target="$HOME/Projects"
-  mkdir -p "$target"
+  # Populate Nautilus's sidebar via ~/.config/gtk-3.0/bookmarks
+  # (still the canonical path under GTK4 — gtk-4.0 is settings only).
+  # Two reasons we don't just rely on the XDG user-dirs mechanism:
+  #
+  #   1. Nautilus 50.1 stopped showing the XDG dirs (Documents,
+  #      Downloads, Music, Pictures, Videos) in the sidebar by default.
+  #      They resolve correctly via GLib (xdg-user-dir, GUserDirectory)
+  #      but the sidebar only shows Home + bookmarks. Confirmed on
+  #      gnome-50/Fedora 44.
+  #   2. We want a ~/Projects entry too, which isn't a standard XDG
+  #      dir at all.
+  #
+  # Fix both with a single explicit bookmarks file. Each line is a
+  # URI optionally followed by a display name; without a name,
+  # Nautilus uses the directory's basename. Ordering in the file is
+  # the rendering order in the sidebar.
+  ui_step "Nautilus sidebar bookmarks"
+  mkdir -p "$HOME/Projects"
   local bookmarks="$HOME/.config/gtk-3.0/bookmarks"
   mkdir -p "$(dirname "$bookmarks")"
-  local entry="file://$target Projects"
-  if [ -f "$bookmarks" ] && grep -qF "file://$target" "$bookmarks"; then
-    ui_skip "bookmark already in $bookmarks"
-    return 0
-  fi
-  printf '%s\n' "$entry" >> "$bookmarks"
-  ui_ok "$target + Nautilus bookmark"
+  {
+    for d in Documents Downloads Music Pictures Videos; do
+      [ -d "$HOME/$d" ] && printf 'file://%s/%s\n' "$HOME" "$d"
+    done
+    printf 'file://%s/Projects Projects\n' "$HOME"
+  } > "$bookmarks"
+  ui_ok "$bookmarks"
+  ui_detail "Documents, Downloads, Music, Pictures, Videos, Projects"
 }
 
 enable_appindicator_extension() {

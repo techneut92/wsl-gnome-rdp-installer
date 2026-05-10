@@ -57,6 +57,20 @@ install_packages() {
       ;;
   esac
 
+  # Mask rtkit-daemon IMMEDIATELY after package install — before anything
+  # (pipewire-pulse.socket activation, gnome-shell start, portal startup)
+  # can dbus-trigger rtkit's spawn. On the WSL2 kernel rtkit's startup
+  # hits `pthread_create failed: Resource temporarily unavailable`, leaves
+  # dbus name-resolution in a broken state, and downstream consumers
+  # (xdg-desktop-portal queries MaxRealtimePriority) hang for 25s × 3
+  # = 75s+ — past portal's 45s TimeoutStartSec, so portal crashloops
+  # forever afterward. Masking BEFORE rtkit is ever activated means
+  # dbus reports NameHasNoOwner instantly and portal proceeds in ~1s.
+  # Diagnosed 2026-05-10: previous mask-during-install_systemd_units
+  # was too late (pipewire enable already triggered rtkit by then).
+  ui_spin "Mask rtkit-daemon.service (no-op + slow on WSL kernel)" \
+    sudo systemctl mask rtkit-daemon.service
+
   if [ "${INSTALL_DESKTOP:-1}" = "1" ]; then
     install_desktop_apps
   else

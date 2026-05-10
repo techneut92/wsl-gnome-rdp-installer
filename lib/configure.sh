@@ -235,20 +235,9 @@ install_systemd_units() {
   ui_spin "Enable gnome-keyring socket (Secret backend for portal)" \
     systemctl --user enable --now gnome-keyring-daemon.socket
 
-  # Mask rtkit-daemon.service. The RealtimeKit daemon is a system-bus
-  # service that grants RT scheduling priority to clients (gnome-shell,
-  # pipewire, portal) — a no-op on the WSL2 kernel which doesn't support
-  # the RT scheduling rtkit expects. On Fedora 44, rtkit's process starts
-  # but its dbus property reads (e.g. MaxRealtimePriority) hang and time
-  # out at the dbus default of 25s. xdg-desktop-portal queries rtkit
-  # three times during startup, so portal blocks ~75s before timing out
-  # past systemd's 45s TimeoutStartSec — portal then crashloops forever
-  # and every flatpak/Firefox call that hits the portal blocks 45s.
-  # Masking rtkit makes those queries fail INSTANTLY (NameHasNoOwner)
-  # so portal proceeds in ~1s. Diagnosed 2026-05-10 via strace on a
-  # fresh F44 install where portal sat in 'activating start' for 100s+.
-  ui_spin "Mask rtkit-daemon.service (no-op + slow on WSL kernel)" \
-    sudo systemctl mask rtkit-daemon.service
+  # rtkit-daemon mask is done early in install_packages (right after
+  # the dnf install) so it's masked BEFORE anything can dbus-trigger
+  # its spawn — see install_packages for the rationale.
 
   # The upstream gnome-remote-desktop-headless.service has
   # `WantedBy=gnome-session.target` in its [Install] section, so a plain

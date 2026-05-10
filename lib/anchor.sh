@@ -84,7 +84,13 @@ EOF
     return 0
   fi
 
-  mv "$tmp" "$vbs"
+  # cp + rm rather than `mv`: drvfs (/mnt/c) can't preserve owner /
+  # timestamps the way ext4 does, and `mv` always tries — emitting a noisy
+  # "Operation not permitted" pair of warnings even though the rename
+  # itself succeeds. `cp` without -p doesn't try to preserve metadata, so
+  # it's quiet on drvfs.
+  cp -- "$tmp" "$vbs"
+  rm -f "$tmp"
   ui_ok "Install $vbs"
   ui_detail "fires at next Windows logon — double-click in Explorer to start now"
 }

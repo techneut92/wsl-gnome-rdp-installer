@@ -116,24 +116,29 @@ install_pop_shell() {
   # too — restart it after gnome-shell is back. Drops any in-progress RDP
   # session, but the installer's running in a pts shell, not RDP.
   if systemctl --user is-active --quiet gnome-shell-headless.service; then
-    # Restart gnome-shell-headless and grd, then sleep long enough
-    # for gnome-shell to claim org.gnome.Shell.Extensions on the
-    # session bus. Polling `gnome-extensions list` over dbus is
-    # unreliable: it returns success-with-empty-list during the
-    # warmup window (gnome-shell registered but extensions not yet
-    # scanned), so the loop never observes pop-shell appearing —
-    # and the FINAL list-check then races the same way and fires
-    # the "hasn't picked it up" warning even though pop-shell IS
-    # loaded (its keybinding init already ran in the journal). The
-    # filesystem is the real source of truth: metadata.json exists,
-    # therefore the extension is installed; gnome-shell will scan
-    # it on this restart cycle.
+    # Restart gnome-shell-headless and grd. Wait for gnome-shell to
+    # claim org.gnome.Shell.Extensions on the session bus AND finish
+    # scanning the extensions dir — bounded at 15s, with a 1s grace
+    # afterward for the dbus name registration to settle.
+    #
+    # An earlier version of this used `sleep 5 + sleep 3` fixed because
+    # the bounded poll appeared to never see pop-shell in the list. The
+    # actual cause was the wsl-flatpak-wslg-sync.path unit (since
+    # replaced by a 1-min timer in wsl-qol@e52c38e) storming the user
+    # session during gnome-shell startup, delaying extension scan past
+    # the 15s window. With the .path watcher gone, the poll typically
+    # finishes in 2-3s and the whole step is ~5s instead of 8s+.
     ui_spin "Restart gnome-shell-headless to pick up Pop Shell" bash -c '
       set -e
       systemctl --user restart gnome-shell-headless.service
-      sleep 5
+      for i in $(seq 1 15); do
+        if gnome-extensions list 2>/dev/null | grep -qx "'"$POP_SHELL_UUID"'"; then
+          break
+        fi
+        sleep 1
+      done
+      sleep 1
       systemctl --user restart gnome-remote-desktop-headless.service 2>/dev/null || true
-      sleep 3
     '
   fi
 

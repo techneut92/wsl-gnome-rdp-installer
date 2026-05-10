@@ -222,6 +222,19 @@ install_systemd_units() {
       pipewire-pulse.socket \
       wireplumber.service
 
+  # gnome-keyring-daemon.socket — same kind of "auto-on at graphical login,
+  # not on headless+linger" gap. The package was installed by install_packages
+  # because Fedora's xdg-desktop-portal config declares
+  # `org.freedesktop.impl.portal.Secret=gnome-keyring;`. Without the socket
+  # enabled, the daemon never gets dbus-activated on this headless setup, the
+  # portal hangs in `activating start` waiting for the Secret backend
+  # (timing out every 45s in a crashloop), and every Firefox/Nautilus call
+  # that hits the portal blocks the full timeout — making the whole session
+  # feel frozen. Enabling the socket here closes the gap; the daemon
+  # itself starts on first dbus access (which the socket file path catches).
+  ui_spin "Enable gnome-keyring socket (Secret backend for portal)" \
+    systemctl --user enable --now gnome-keyring-daemon.socket
+
   # The upstream gnome-remote-desktop-headless.service has
   # `WantedBy=gnome-session.target` in its [Install] section, so a plain
   # `systemctl --user enable` only links it into gnome-session.target.wants/.

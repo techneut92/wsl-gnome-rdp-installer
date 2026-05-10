@@ -28,6 +28,7 @@ install_packages() {
           gnome-keyring \
           mutter \
           openssl \
+          xdg-user-dirs \
           flatpak \
           git \
           make \
@@ -45,6 +46,7 @@ install_packages() {
           gnome-keyring \
           mutter \
           openssl \
+          xdg-user-dirs \
           dbus-user-session \
           flatpak \
           git \

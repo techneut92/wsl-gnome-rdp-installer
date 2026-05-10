@@ -103,6 +103,7 @@ Set any `INSTALL_*` env var to `0`/`1` and the matching component box in the upf
 |               | `INSTALL_POP_SHELL=0/1`   | Pre-check the Pop Shell box |
 |               | `INSTALL_APPINDICATOR=0/1` | Pre-check the AppIndicator box |
 |               | `INSTALL_RENDERD=0/1`     | Pre-check the custom-kernel box (see [Optional: custom kernel for `/dev/dri/renderD128`](#optional-custom-kernel-for-devdrirenderd128)) |
+|               | `INSTALL_ANCHOR=0/1`      | Pre-check the persistence-anchor box (see [Optional: persist the distro across closing the shell](#optional-persist-the-distro-across-closing-the-shell)) — default OFF |
 
 ---
 
@@ -164,6 +165,24 @@ Prints PASS/FAIL for: .ko files present for current kernel, modules-load.d persi
 
 ---
 
+## Optional: persist the distro across closing the shell
+
+The component checklist defaults the **"Persist distro across closing the shell"** box to **OFF**. WSL2 terminates a distro session as soon as the last `wsl.exe` client exits — closing the PowerShell window you used to launch WSL takes `gnome-shell-headless` + `grd` down with it, dropping any active RDP connection. `vmIdleTimeout=-1` does *not* fix this: it governs the lightweight VM, not the per-distro session, so the kernel keeps running but the distro inside it is gone.
+
+Opt in to drop a tiny `.vbs` into `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\` that launches a hidden `wsl.exe -d <distro> -- /usr/bin/sleep infinity` at every Windows logon. That hidden client holds the distro session open across any number of shell open/close cycles.
+
+**Trade-off.** With the anchor running, WSL keeps eating its allocated memory until you explicitly `wsl --shutdown` — closing your shell no longer drops the distro, so it no longer triggers per-distro process cleanup. The reclaim path is exactly the same as before (`wsl --shutdown` returns RAM to Windows) but you have to invoke it deliberately. The anchor re-fires on next Windows logon.
+
+**Knobs.**
+
+- `INSTALL_ANCHOR=1` — pre-check the box (or check it in the menu).
+- `INSTALL_ANCHOR=0` — default; if previously installed, the installer removes the `.vbs` on the next run.
+- The anchor is per-distro (filename includes `$WSL_DISTRO_NAME`), so multi-distro setups can anchor each independently.
+
+The `.vbs` is dropped at install time but only fires at the *next* Windows logon. To start the anchor immediately without logging out, double-click the file in Explorer once.
+
+---
+
 ## Multi-distro support
 
 Running two WSL2 distros side-by-side hits a sharp edge: WSL2 doesn't cgroup-namespace its distros, so every distro's PID 1 systemd targets the same cgroup path `/user.slice/user-$UID.slice/user@$UID.service/`. If both have a UID-1000 user (the WSL default), whichever distro boots second hits EBUSY and `user@$UID.service` fails to start:
@@ -213,6 +232,7 @@ lib/
   configure.sh                                 grdctl + systemd user units
   pop_shell.sh                                 Pop Shell build + enable
   renderd_kernel.sh                            opt-in custom kernel for /dev/dri/renderD128
+  anchor.sh                                    opt-in Windows Startup-folder VBS anchor for distro persistence
   verify.sh                                    end-of-run sanity check + summary
 extras/
   renderd/

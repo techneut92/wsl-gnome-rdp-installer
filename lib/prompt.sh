@@ -13,7 +13,8 @@
 #      ui_multiselect (lib/ui.sh). Arrow keys to navigate, space to
 #      toggle, enter to confirm, q/esc to cancel. Toggles INSTALL_DESKTOP,
 #      INSTALL_FIREFOX, INSTALL_ONLYOFFICE, INSTALL_POP_SHELL,
-#      INSTALL_RENDERD. Pre-checked from the corresponding env vars.
+#      INSTALL_RENDERD, INSTALL_ANCHOR. Pre-checked from the corresponding
+#      env vars (INSTALL_ANCHOR defaults OFF — opt-in only).
 #
 #      AppIndicator is NOT in the menu — it's mandatory (always installed)
 #      because the headline tray-icon use case (jetbrains-toolbox)
@@ -65,7 +66,7 @@ _prompt_components() {
   # screen capture / Wayland gating in PipeWire/OBS/Firefox/etc. Users
   # who don't want them just uncheck the box.
   local desktop_state=ON   firefox_state=ON   onlyoffice_state=ON
-  local pop_state=ON       renderd_state=ON
+  local pop_state=ON       renderd_state=ON   anchor_state=OFF
   [ "${INSTALL_DESKTOP:-1}"    = "0" ] && desktop_state=OFF
   [ "${INSTALL_FIREFOX:-1}"    = "0" ] && firefox_state=OFF
   [ "${INSTALL_ONLYOFFICE:-1}" = "0" ] && onlyoffice_state=OFF
@@ -73,6 +74,11 @@ _prompt_components() {
   case "${INSTALL_RENDERD:-}" in
     0|no|false|skip)  renderd_state=OFF ;;
   esac
+  # Anchor defaults OFF — closing the shell terminating the distro is
+  # WSL's default and gives users free memory reclaim. Opt in to keep
+  # the RDP listener alive across "close PowerShell" at the cost of
+  # needing `wsl --shutdown` to reclaim.
+  [ "${INSTALL_ANCHOR:-0}" = "1" ] && anchor_state=ON
 
   # Probe the prebuilt artifact host once so the renderd label can
   # tell the user up-front whether keeping it checked means a 5–10s
@@ -95,7 +101,8 @@ _prompt_components() {
     "firefox|Firefox (flatpak, flathub)|$firefox_state" \
     "onlyoffice|ONLYOFFICE (flatpak, flathub)|$onlyoffice_state" \
     "pop_shell|Pop Shell tiling extension|$pop_state" \
-    "renderd|$renderd_label|$renderd_state"); then
+    "renderd|$renderd_label|$renderd_state" \
+    "anchor|Persist distro across closing the shell (wsl.exe Startup anchor)|$anchor_state"); then
     die "Cancelled at component selection."
   fi
 
@@ -105,6 +112,7 @@ _prompt_components() {
   INSTALL_ONLYOFFICE=0
   INSTALL_POP_SHELL=0
   INSTALL_RENDERD=0
+  INSTALL_ANCHOR=0
   local c
   for c in $choices; do
     case "$c" in
@@ -113,10 +121,11 @@ _prompt_components() {
       onlyoffice) INSTALL_ONLYOFFICE=1 ;;
       pop_shell)  INSTALL_POP_SHELL=1 ;;
       renderd)    INSTALL_RENDERD=1 ;;
+      anchor)     INSTALL_ANCHOR=1 ;;
     esac
   done
   export INSTALL_DESKTOP INSTALL_FIREFOX INSTALL_ONLYOFFICE \
-         INSTALL_POP_SHELL INSTALL_RENDERD
+         INSTALL_POP_SHELL INSTALL_RENDERD INSTALL_ANCHOR
 }
 
 # Public entry point — call from install.sh before any heavy work.
@@ -141,6 +150,7 @@ prompt_all_settings() {
     INSTALL_ONLYOFFICE="${INSTALL_ONLYOFFICE:-1}"
     INSTALL_POP_SHELL="${INSTALL_POP_SHELL:-1}"
     INSTALL_RENDERD="${INSTALL_RENDERD:-1}"
+    INSTALL_ANCHOR="${INSTALL_ANCHOR:-0}"
     ui_skip "non-interactive — using env/defaults for everything"
     ui_detail "username=$RDP_USERNAME, reuse=${REUSE_CREDS}"
   else
@@ -149,5 +159,5 @@ prompt_all_settings() {
   fi
   export RDP_USERNAME RDP_PASSWORD REUSE_CREDS \
          INSTALL_DESKTOP INSTALL_FIREFOX INSTALL_ONLYOFFICE \
-         INSTALL_POP_SHELL INSTALL_RENDERD
+         INSTALL_POP_SHELL INSTALL_RENDERD INSTALL_ANCHOR
 }

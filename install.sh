@@ -38,7 +38,7 @@ pre-checked/unchecked:
 
   INSTALL_DESKTOP=0/1       INSTALL_FIREFOX=0/1
   INSTALL_ONLYOFFICE=0/1    INSTALL_POP_SHELL=0/1
-  INSTALL_RENDERD=0/1
+  INSTALL_RENDERD=0/1       INSTALL_ANCHOR=0/1
 
 AppIndicator extension is mandatory (always installed) — needed for
 tray-icon apps like jetbrains-toolbox.
@@ -85,8 +85,8 @@ export PROJECT_ROOT
 . "$PROJECT_ROOT/lib/renderd_kernel.sh"
 # shellcheck source=lib/qol_bootstrap.sh
 . "$PROJECT_ROOT/lib/qol_bootstrap.sh"
-# shellcheck source=lib/wslconfig.sh
-. "$PROJECT_ROOT/lib/wslconfig.sh"
+# shellcheck source=lib/anchor.sh
+. "$PROJECT_ROOT/lib/anchor.sh"
 # shellcheck source=lib/prompt.sh
 . "$PROJECT_ROOT/lib/prompt.sh"
 
@@ -259,7 +259,7 @@ precheck_user_at_service           # installs drop-in + start probe
 # Ask everything upfront — credentials + which optional components to
 # install. Keeps the rest of the run uninterrupted. Sets RDP_USERNAME,
 # RDP_PASSWORD, REUSE_CREDS, INSTALL_DESKTOP, INSTALL_FLATPAK,
-# INSTALL_POP_SHELL, INSTALL_APPINDICATOR, INSTALL_RENDERD.
+# INSTALL_POP_SHELL, INSTALL_APPINDICATOR, INSTALL_RENDERD, INSTALL_ANCHOR.
 prompt_all_settings
 
 # Run wsl-qol first — owns the desktop-agnostic fixes (binfmt drop-in,
@@ -280,7 +280,7 @@ install_packages                   # uses DISTRO_FAMILY + INSTALL_DESKTOP/INSTAL
 # build) — the prompt warned the user about the cold path up-front.
 [ "${INSTALL_RENDERD:-0}" = "1" ] && install_renderd_kernel
 enable_lingering                   # safe now: user@$UID.service is healthy
-install_wslconfig_keepalive        # vmIdleTimeout=-1 so VM survives closing the wsl.exe shell
+install_anchor                     # opt-in Windows-side wsl.exe anchor for RDP persistence (INSTALL_ANCHOR=1)
 ensure_user_dbus                   # /run/user setup + dbus polling
 
 ui_phase "RDP services"

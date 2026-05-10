@@ -85,6 +85,8 @@ export PROJECT_ROOT
 . "$PROJECT_ROOT/lib/renderd_kernel.sh"
 # shellcheck source=lib/qol_bootstrap.sh
 . "$PROJECT_ROOT/lib/qol_bootstrap.sh"
+# shellcheck source=lib/wslconfig.sh
+. "$PROJECT_ROOT/lib/wslconfig.sh"
 # shellcheck source=lib/prompt.sh
 . "$PROJECT_ROOT/lib/prompt.sh"
 
@@ -278,6 +280,7 @@ install_packages                   # uses DISTRO_FAMILY + INSTALL_DESKTOP/INSTAL
 # build) — the prompt warned the user about the cold path up-front.
 [ "${INSTALL_RENDERD:-0}" = "1" ] && install_renderd_kernel
 enable_lingering                   # safe now: user@$UID.service is healthy
+install_wslconfig_keepalive        # vmIdleTimeout=-1 so VM survives closing the wsl.exe shell
 ensure_user_dbus                   # /run/user setup + dbus polling
 
 ui_phase "RDP services"

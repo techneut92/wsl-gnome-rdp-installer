@@ -285,6 +285,7 @@ ensure_tls_cert                    # winpr-makecert if available, else openssl
 configure_grd                      # grdctl --headless settings
 install_user_environment           # ~/.config/environment.d/*.conf
 install_xdg_user_dirs              # ~/Downloads, ~/Documents, ~/Pictures, … (xdg-user-dirs-update)
+install_projects_dir               # ~/Projects + Nautilus sidebar bookmark
 install_default_wallpaper          # /usr/share/backgrounds/pane-wallpaper.jpg + gsettings (first-install only)
 apply_theme_sync                   # re-fire post-packages so gsettings tier lands (wsl-qol's bootstrap fires too early)
 apply_flatpak_sync                 # re-fire post-packages so newly-installed flatpaks publish to Start Menu

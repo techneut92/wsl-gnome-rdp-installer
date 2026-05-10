@@ -97,27 +97,53 @@ install_xdg_user_dirs() {
   # /etc/xdg/autostart/xdg-user-dirs.desktop at gnome-session start.
   # We don't run gnome-session here (`gnome-shell --mode=user` directly),
   # so the autostart entry never fires and the dirs never appear — file
-  # dialogs get a flat $HOME with .config/.cache/.local visible.
+  # dialogs get a flat $HOME with .config/.cache/.local visible, and
+  # Nautilus's sidebar drops the Documents/Music/Pictures/Videos
+  # entries because it gates them on user-dirs.dirs lines.
   #
-  # `xdg-user-dirs-update`:
-  #   - reads /etc/xdg/user-dirs.defaults for the list of dirs + locale
-  #     translations (e.g. Bilder/Pictures depending on $LANG),
-  #   - mkdir -p's each one,
-  #   - writes ~/.config/user-dirs.dirs and ~/.config/user-dirs.locale.
-  # Idempotent — re-running is a no-op once the dirs exist.
+  # We don't trust a bare `xdg-user-dirs-update` call here: it only
+  # initialises user-dirs.dirs on first run and won't backfill missing
+  # entries on subsequent runs. Past installs that bailed out early
+  # (e.g., before the gnome-session autostart fired) leave a partial
+  # file with just DESKTOP/DOWNLOAD/TEMPLATES — those re-runs of the
+  # installer's old idempotency guard would skip on "Downloads exists"
+  # and never fix the gap. Iterate explicitly with --set to force the
+  # full set into place; --set is idempotent on its own line.
   ui_step "XDG user dirs"
   if ! command -v xdg-user-dirs-update >/dev/null 2>&1; then
     ui_skip "xdg-user-dirs-update not installed"
     return 0
   fi
-  if [ -f "$HOME/.config/user-dirs.dirs" ] \
-     && [ -d "$HOME/Downloads" ] \
-     && [ -d "$HOME/Documents" ]; then
-    ui_skip "user-dirs.dirs + standard folders already in place"
+  for pair in DESKTOP:Desktop DOWNLOAD:Downloads DOCUMENTS:Documents \
+              MUSIC:Music PICTURES:Pictures VIDEOS:Videos \
+              TEMPLATES:Templates PUBLICSHARE:Public; do
+    name=${pair%:*}
+    dir=${pair#*:}
+    mkdir -p "$HOME/$dir"
+    xdg-user-dirs-update --set "$name" "$HOME/$dir" 2>/dev/null || true
+  done
+  ui_ok "user-dirs.dirs"
+  ui_detail "Downloads, Documents, Pictures, Music, Videos, Desktop, Templates, Public"
+}
+
+install_projects_dir() {
+  # Add a ~/Projects folder + a Nautilus sidebar bookmark for it.
+  # Nautilus reads ~/.config/gtk-3.0/bookmarks (still the canonical
+  # path under GTK4 — the gtk-4.0 dir is for settings only) and
+  # appends entries below the XDG user-dirs section in the sidebar.
+  # Format is "<URI> [optional display name]" per line.
+  ui_step "Projects folder"
+  local target="$HOME/Projects"
+  mkdir -p "$target"
+  local bookmarks="$HOME/.config/gtk-3.0/bookmarks"
+  mkdir -p "$(dirname "$bookmarks")"
+  local entry="file://$target Projects"
+  if [ -f "$bookmarks" ] && grep -qF "file://$target" "$bookmarks"; then
+    ui_skip "bookmark already in $bookmarks"
     return 0
   fi
-  ui_spin "Run xdg-user-dirs-update" xdg-user-dirs-update
-  ui_detail "Downloads, Documents, Pictures, Music, Videos, Desktop, Templates, Public"
+  printf '%s\n' "$entry" >> "$bookmarks"
+  ui_ok "$target + Nautilus bookmark"
 }
 
 enable_appindicator_extension() {

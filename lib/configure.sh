@@ -156,6 +156,26 @@ enable_appindicator_extension() {
   ui_detail "takes effect on next gnome-shell start"
 }
 
+apply_theme_sync() {
+  # Re-fire wsl-theme-sync now that the GNOME stack (and its gsettings
+  # schemas) are installed. wsl-qol's own oneshot_theme_sync runs early
+  # in bootstrap_wsl_qol — that's intentional, so the binfmt drop-in,
+  # flatpak setup, and pulse-detach unit are ready before our dnf step
+  # uses them. But it means the FIRST fire of wsl-theme-sync happens
+  # before org.gnome.desktop.interface is registered: tier 1 (gsettings)
+  # silently no-ops and color-scheme stays at its dconf default. wsl-qol
+  # detects schema-missing and skips the fire there; we own the post-
+  # packages re-fire. Idempotent — wsl-theme-sync is a one-shot mirror,
+  # not a config writer.
+  ui_step "Theme sync (post-packages re-fire)"
+  if [ ! -x /usr/local/bin/wsl-theme-sync ]; then
+    ui_skip "wsl-theme-sync not installed (QOL_THEME_SYNC disabled?)"
+    return 0
+  fi
+  ui_spin "wsl-theme-sync (one-shot mirror)" \
+    /usr/local/bin/wsl-theme-sync
+}
+
 install_x11_unix_fix() {
   ui_step "WSLg /tmp/.X11-unix fix"
   # WSL's /init recreates /tmp/.X11-unix as a symlink to /mnt/wslg/.X11-unix

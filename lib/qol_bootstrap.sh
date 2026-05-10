@@ -1,4 +1,4 @@
-# lib/qol_bootstrap.sh — vendor in github.com/techneut92/wsl-qol.
+# lib/qol_bootstrap.sh — vendor in codeberg.org/techneut92/wsl-qol.
 #
 # wsl-qol owns the desktop-agnostic WSL2 fixes (WSLInterop binfmt,
 # flatpak Start-Menu auto-publish, theme sync, WSLg pulse-detach,
@@ -20,7 +20,7 @@
 bootstrap_wsl_qol() {
   ui_phase "WSL QOL (sibling project)"
   local dir="${WSL_QOL_DIR:-$HOME/.local/share/wsl-qol}"
-  local url="${WSL_QOL_URL:-https://github.com/techneut92/wsl-qol.git}"
+  local url="${WSL_QOL_URL:-https://codeberg.org/techneut92/wsl-qol.git}"
 
   if [ -d "$dir/.git" ]; then
     ui_spin "Refresh $dir" \

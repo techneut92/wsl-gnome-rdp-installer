@@ -40,7 +40,7 @@ Multi-monitor works out of the box (`mstsc /multimon`) — `gnome-shell` is star
 In your WSL distro, as your normal user (sudo is used internally where needed):
 
 ```bash
-git clone https://github.com/techneut92/wsl-gnome-rdp-installer.git
+git clone https://codeberg.org/techneut92/wsl-gnome-rdp-installer.git
 cd wsl-gnome-rdp-installer
 ./install.sh
 ```
@@ -196,7 +196,7 @@ This installer detects the collision (foreign-PID-namespace processes show as `0
 
 - Picks the next free UID by scanning **both** `/etc/passwd` *and* the shared cgroup tree, so 3+ distros don't collide.
 - Updates `/etc/wsl.conf` to `[user]default=$USERNAME` so the WSL launcher resolves your user by name (renumber-proof; otherwise `wsl -d <distro>` calls `getpwuid(OLD_UID)` → fails → drops you into root).
-- Relies on the sibling [wsl-qol](https://github.com/techneut92/wsl-qol) repo's `wslg-pulse-detach.service` (auto-installed by the bootstrap phase) to detach WSLg's pre-created `/run/user/$UID/pulse → /mnt/wslg/runtime-dir/pulse` symlink (mode `0700` UID 1000, hardcoded by Microsoft) so `pipewire-pulse.socket` can bind on a renumbered UID.
+- Relies on the sibling [wsl-qol](https://codeberg.org/techneut92/wsl-qol) repo's `wslg-pulse-detach.service` (auto-installed by the bootstrap phase) to detach WSLg's pre-created `/run/user/$UID/pulse → /mnt/wslg/runtime-dir/pulse` symlink (mode `0700` UID 1000, hardcoded by Microsoft) so `pipewire-pulse.socket` can bind on a renumbered UID.
 
 The flow:
 
@@ -224,7 +224,7 @@ lib/
   ui.sh                                        colors, headers, ui_spin
   common.sh                                    log/distro detection
   prompt.sh                                    upfront credential + component prompts (whiptail)
-  qol_bootstrap.sh                             clone + run github.com/techneut92/wsl-qol
+  qol_bootstrap.sh                             clone + run codeberg.org/techneut92/wsl-qol
   packages.sh                                  dnf/apt packages, flatpaks
   cgroup_collision.sh                          multi-distro detect + UID renumber
   dbus.sh                                      systemd 259 drop-in + user-bus bootstrap

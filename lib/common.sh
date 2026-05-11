@@ -67,6 +67,41 @@ pick_gallium_driver() {
   esac
 }
 
+# Pick a GSK renderer for GTK 4 apps.
+#
+# WSL_RDP_GSK_RENDERER overrides; otherwise auto-detect by host GPU.
+#   ngl     — GSK's OpenGL renderer. Routes GTK 4 rendering through
+#             Mesa's GL stack (d3d12 on NVIDIA/AMD, llvmpipe on Intel).
+#   vulkan  — GSK's Vulkan renderer. On WSL2 this means Mesa's dzn
+#             (Vulkan-on-DX12), which Mesa flags as 'not a conformant
+#             Vulkan implementation, testing use only'. Works on NVIDIA;
+#             crashes GTK 4 apps on Intel Arc Xe (Nautilus → SIGABRT
+#             with VK_ERROR_DEVICE_LOST within seconds).
+#   cairo   — software Cairo renderer. Slowest, always correct.
+#   ""      — leave GSK alone; GTK picks its default (Vulkan on GTK 4.20+).
+#
+# Defaults: Intel → ngl, others → "" (GTK default). On Intel-broken
+# hardware where GALLIUM_DRIVER=llvmpipe is already in effect, ngl just
+# routes GTK 4 through software OpenGL — same place its other rendering
+# already lives.
+#
+# Echoes the chosen renderer string (possibly empty).
+pick_gsk_renderer() {
+  local override="${WSL_RDP_GSK_RENDERER:-auto}"
+  case "$override" in
+    ngl|vulkan|cairo|gl) echo "$override"; return 0 ;;
+    none|"")             echo ""; return 0 ;;
+    auto) ;;
+    *)
+      ui_warn "Unknown WSL_RDP_GSK_RENDERER='$override' — falling back to auto"
+      ;;
+  esac
+  case "$(host_gpu_vendor)" in
+    intel) echo ngl ;;
+    *)     echo "" ;;
+  esac
+}
+
 detect_distro() {
   [ -f /etc/os-release ] || die "/etc/os-release missing — can't detect distro"
   # shellcheck disable=SC1091

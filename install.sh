@@ -52,6 +52,15 @@ Compositor GPU path:
                (Meteor Lake), so we fall back to the software path
                there. Use 'd3d12' to force HW; use 'llvmpipe' if you
                see a black-screen-with-cursor over RDP.
+
+GTK 4 renderer (for Nautilus / Files, Settings, etc.):
+  WSL_RDP_GSK_RENDERER=auto|ngl|vulkan|cairo|none   (default: auto)
+
+    auto     — ngl on Intel, GTK default on NVIDIA/AMD. GTK 4.20+
+               defaults to Vulkan, which on WSL2 means Mesa dzn —
+               stable on NVIDIA, crashes Nautilus on Intel Arc Xe.
+               'ngl' routes GTK 4 through Mesa's OpenGL stack instead.
+               'none' explicitly leaves GTK alone.
 EOF
 }
 

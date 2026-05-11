@@ -18,6 +18,8 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$PROJECT_ROOT/lib/ui.sh"
 # shellcheck source=lib/common.sh
 . "$PROJECT_ROOT/lib/common.sh"
+# shellcheck source=lib/probe.sh
+. "$PROJECT_ROOT/lib/probe.sh"
 
 QUICK=0
 while getopts ":qh" opt; do
@@ -122,52 +124,19 @@ if [ "$QUICK" = "1" ]; then
   ui_phase "Live probes (skipped — -q)"
 else
   ui_phase "Live probes"
+  # Read-only invocation: if eglinfo / vulkaninfo aren't installed,
+  # run_probes() degrades gracefully (skip-with-detail). install.sh
+  # installs the tools first via install_probe_tools(); diagnose.sh
+  # deliberately does not (stays pure-read).
+  run_probes
 
-  if command -v eglinfo >/dev/null 2>&1; then
-    ui_step "OpenGL: d3d12 path"
-    out=$(GALLIUM_DRIVER=d3d12 timeout 5 eglinfo -p surfaceless 2>&1 | grep -E '^(EGL version|OpenGL (vendor|renderer|version))' | head -4)
-    if [ -n "$out" ]; then
-      echo "$out" | sed 's/^/    /'
-    else
-      ui_err "d3d12 EGL surfaceless probe failed (no GL context)"
-    fi
-
-    ui_step "OpenGL: llvmpipe path"
-    out=$(LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe timeout 5 eglinfo -p surfaceless 2>&1 | grep -E '^(EGL version|OpenGL (vendor|renderer|version))' | head -4)
-    if [ -n "$out" ]; then
-      echo "$out" | sed 's/^/    /'
-    else
-      ui_err "llvmpipe EGL surfaceless probe failed"
-    fi
-  else
+  if [ "${DIAG_PROBED:-0}" != "1" ]; then
     case "$DISTRO_FAMILY" in
-      fedora-like) hint="sudo dnf install mesa-demos" ;;
-      debian-like) hint="sudo apt install mesa-utils" ;;
-      *)           hint="(install mesa-demos / mesa-utils)" ;;
+      fedora-like) hint="sudo dnf install egl-utils vulkan-tools" ;;
+      debian-like) hint="sudo apt install mesa-utils-extra vulkan-tools" ;;
+      *)           hint="install eglinfo + vulkaninfo (egl-utils / mesa-utils-extra + vulkan-tools)" ;;
     esac
-    ui_skip "eglinfo not installed — skipping OpenGL probe"
-    ui_detail "$hint"
-  fi
-
-  if command -v vulkaninfo >/dev/null 2>&1; then
-    ui_step "Vulkan: dzn path"
-    out=$(timeout 5 vulkaninfo --summary 2>&1)
-    if echo "$out" | grep -q 'apiVersion'; then
-      echo "$out" | grep -E '(apiVersion|deviceName|driverName|driverInfo)' | head -8 | sed 's/^/    /'
-      if echo "$out" | grep -qi 'dzn'; then
-        ui_warn "dzn is loaded — Mesa's own warning: 'not a conformant Vulkan implementation, testing use only'"
-      fi
-    else
-      ui_err "vulkaninfo failed (no Vulkan device found)"
-    fi
-  else
-    case "$DISTRO_FAMILY" in
-      fedora-like) hint="sudo dnf install vulkan-tools" ;;
-      debian-like) hint="sudo apt install vulkan-tools" ;;
-      *)           hint="(install vulkan-tools)" ;;
-    esac
-    ui_skip "vulkaninfo not installed — skipping Vulkan probe"
-    ui_detail "$hint"
+    ui_detail "for full GL/Vulkan probe output: $hint"
   fi
 fi
 

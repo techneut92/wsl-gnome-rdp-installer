@@ -86,6 +86,8 @@ export PROJECT_ROOT
 . "$PROJECT_ROOT/lib/ui.sh"
 # shellcheck source=lib/common.sh
 . "$PROJECT_ROOT/lib/common.sh"
+# shellcheck source=lib/probe.sh
+. "$PROJECT_ROOT/lib/probe.sh"
 # shellcheck source=lib/packages.sh
 . "$PROJECT_ROOT/lib/packages.sh"
 # shellcheck source=lib/dbus.sh
@@ -288,6 +290,27 @@ prompt_all_settings
 # flatpak exports dir, and the /tmp deny override needs to apply
 # before ONLYOFFICE is launched the first time.
 bootstrap_wsl_qol
+
+ui_phase "Diagnose"
+# Install eglinfo / vulkaninfo (cheap, ~30MB on first run; no-op on
+# subsequent runs) and run live GL + Vulkan probes. The pickers in
+# lib/common.sh consult DIAG_* globals before falling back to the vendor
+# heuristic — that lets a future Mesa or Intel-driver fix transparently
+# enable d3d12 here without needing a new installer release. Set
+# WSL_RDP_NO_PROBE=1 to skip (pickers fall back to pure heuristic).
+if [ "${WSL_RDP_NO_PROBE:-0}" = "1" ]; then
+  ui_skip "WSL_RDP_NO_PROBE=1 — skipping live probes"
+else
+  install_probe_tools
+  run_probes
+fi
+
+ui_step "Auto-detected install choices"
+_gallium_preview=$(pick_gallium_driver)
+_gsk_preview=$(pick_gsk_renderer)
+ui_detail "host GPU:        $(host_gpu_vendor)"
+ui_detail "GALLIUM_DRIVER:  $_gallium_preview  (override: WSL_RDP_GALLIUM_DRIVER)"
+ui_detail "GSK_RENDERER:    ${_gsk_preview:-<unset; GTK default>}  (override: WSL_RDP_GSK_RENDERER)"
 
 ui_phase "Host setup"
 install_packages                   # uses DISTRO_FAMILY + INSTALL_DESKTOP/INSTALL_FLATPAK

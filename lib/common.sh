@@ -61,6 +61,15 @@ pick_gallium_driver() {
       ui_warn "Unknown WSL_RDP_GALLIUM_DRIVER='$override' — falling back to auto"
       ;;
   esac
+  # Probe-driven: if d3d12 EGL init catastrophically fails on this box
+  # (driver missing, dxg broken, host GPU offline), don't pick it. Note
+  # the probe can't detect the Intel-Arc-Xe render-path bug because
+  # eglinfo never paints a frame — the vendor heuristic below handles
+  # that case.
+  if [ "${DIAG_PROBED:-0}" = "1" ] && [ "${DIAG_GL_D3D12_WORKS:-0}" != "1" ]; then
+    echo llvmpipe
+    return 0
+  fi
   case "$(host_gpu_vendor)" in
     intel) echo llvmpipe ;;
     *)     echo d3d12 ;;
@@ -96,6 +105,14 @@ pick_gsk_renderer() {
       ui_warn "Unknown WSL_RDP_GSK_RENDERER='$override' — falling back to auto"
       ;;
   esac
+  # Probe-driven: if Vulkan init fails outright, GTK has no Vulkan to
+  # pick anyway — but pin ngl so GTK doesn't waste time probing every
+  # launch. (Catastrophic-init case; the Intel-render-path bug is
+  # handled by the vendor heuristic below.)
+  if [ "${DIAG_PROBED:-0}" = "1" ] && [ "${DIAG_VK_WORKS:-0}" != "1" ]; then
+    echo ngl
+    return 0
+  fi
   case "$(host_gpu_vendor)" in
     intel) echo ngl ;;
     *)     echo "" ;;

@@ -47,6 +47,13 @@ cd wsl-gnome-rdp-installer
 ./install.sh
 ```
 
+Before installing (or to triage a broken install afterwards), run the read-only probe to see what's detected and which auto-detected choices the installer would make on your box:
+
+```bash
+./diagnose.sh        # full report
+./diagnose.sh -q     # skip live GL/Vulkan probes
+```
+
 All interaction happens upfront, inline (no full-screen TUI):
 
 1. **RDP credentials** — username (defaults to `$USER`), then password asked twice for confirmation. Empty or mismatched re-prompts. On a re-run where `gnome-remote-desktop` already has stored credentials, this is silently skipped (pass `-u`/`-p` to force a change).

@@ -111,6 +111,17 @@ install_pop_shell() {
   fi
   rm -f "$make_log"
 
+  # Drop the build tree — `make local-install` already copied the
+  # extension into ~/.local/share/gnome-shell/extensions/, and nothing
+  # downstream (restart-shell, enable, verify) reads from $POP_SHELL_SRC.
+  # Re-running the installer just re-clones, which is fine.
+  # Also rmdir the parent (~/src by default) if it's now empty — keeps
+  # $HOME tidy without clobbering anything the user may have put there.
+  if [ -d "$POP_SHELL_SRC" ]; then
+    rm -rf "$POP_SHELL_SRC"
+    rmdir "$(dirname "$POP_SHELL_SRC")" 2>/dev/null || true
+  fi
+
   # Bounce gnome-shell so it rescans the extensions dir and registers Pop
   # Shell. grd's Requires=gnome-shell-headless means systemd will stop grd
   # too — restart it after gnome-shell is back. Drops any in-progress RDP

@@ -52,6 +52,35 @@ install_probe_tools() {
   esac
 }
 
+# Pure-bash field extractors — used by run_probes() so the probes don't
+# depend on awk, which isn't guaranteed to be installed on a minimal
+# image at this point in the pipeline (probes run BEFORE install_packages).
+# grep + sed live in glibc-base; awk does not on Fedora minimal.
+
+# extract_renderer <eglinfo-output>
+# Echoes the value after `OpenGL [core profile ]renderer:`, or empty.
+extract_renderer() {
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^OpenGL(\ core\ profile)?\ renderer:\ *(.+)$ ]]; then
+      printf '%s\n' "${BASH_REMATCH[2]}"
+      return 0
+    fi
+  done <<<"$1"
+}
+
+# extract_kv <vulkaninfo-output> <key>
+# vulkaninfo --summary prints `<indent><key> = <value>`; echo the first value.
+extract_kv() {
+  local line key="$2"
+  while IFS= read -r line; do
+    if [[ "$line" =~ $key[[:space:]]*=[[:space:]]*(.+)$ ]]; then
+      printf '%s\n' "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  done <<<"$1"
+}
+
 # Run the probes once per process. Idempotent via DIAG_PROBED.
 # Probes are wrapped in timeout(1) so a hung driver can't stall install.
 run_probes() {
@@ -78,13 +107,20 @@ run_probes() {
   # pipefail propagates that as the pipe's exit status — making a
   # successful match look like a failed grep. Here-strings have no
   # writer process, so no SIGPIPE, no false failure.
+  # Each probe is wrapped so a non-zero exit (timeout, segfault, no GL
+  # context) can't trip install.sh's `set -e` and silently abort the run.
+  # We inspect $out regardless of eglinfo's exit code — a crashed driver
+  # is information, not a fatal error.
   ui_step "GL: d3d12 path"
   if command -v eglinfo >/dev/null 2>&1; then
     local out
-    out=$(GALLIUM_DRIVER=d3d12 timeout 5 eglinfo 2>&1)
-    if grep -qE '^OpenGL( core profile)? renderer:' <<<"$out"; then
+    out=$(GALLIUM_DRIVER=d3d12 timeout 5 eglinfo 2>&1) || true
+    # Pure bash extraction — awk isn't guaranteed to be installed yet
+    # (probes run before install_packages). The renderer line looks like
+    # `OpenGL core profile renderer: <name>` or `OpenGL renderer: <name>`.
+    DIAG_GL_D3D12_RENDERER=$(extract_renderer "$out")
+    if [ -n "$DIAG_GL_D3D12_RENDERER" ]; then
       DIAG_GL_D3D12_WORKS=1
-      DIAG_GL_D3D12_RENDERER=$(awk -F': *' '/^OpenGL core profile renderer/{print $2; exit}' <<<"$out")
       ui_ok "$DIAG_GL_D3D12_RENDERER"
     else
       ui_warn "no GL context — d3d12 init failed"
@@ -97,10 +133,10 @@ run_probes() {
   if command -v eglinfo >/dev/null 2>&1; then
     local out
     out=$(LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
-            timeout 5 eglinfo 2>&1)
-    if grep -qE '^OpenGL( core profile)? renderer:' <<<"$out"; then
+            timeout 5 eglinfo 2>&1) || true
+    DIAG_GL_LLVMPIPE_RENDERER=$(extract_renderer "$out")
+    if [ -n "$DIAG_GL_LLVMPIPE_RENDERER" ]; then
       DIAG_GL_LLVMPIPE_WORKS=1
-      DIAG_GL_LLVMPIPE_RENDERER=$(awk -F': *' '/^OpenGL core profile renderer/{print $2; exit}' <<<"$out")
       ui_ok "$DIAG_GL_LLVMPIPE_RENDERER"
     else
       ui_warn "no GL context — llvmpipe init failed (something is very wrong)"
@@ -112,10 +148,10 @@ run_probes() {
   ui_step "Vulkan path"
   if command -v vulkaninfo >/dev/null 2>&1; then
     local vkout
-    vkout=$(timeout 5 vulkaninfo --summary 2>&1)
+    vkout=$(timeout 5 vulkaninfo --summary 2>&1) || true
     if grep -q 'apiVersion' <<<"$vkout"; then
       DIAG_VK_WORKS=1
-      DIAG_VK_DRIVER=$(awk -F'= *' '/driverName/{print $2; exit}' <<<"$vkout")
+      DIAG_VK_DRIVER=$(extract_kv "$vkout" driverName)
       if grep -qiE 'microsoft direct3d12|dzn' <<<"$vkout"; then
         DIAG_VK_IS_DZN=1
         ui_warn "$DIAG_VK_DRIVER (dzn — Mesa flags it 'testing use only')"

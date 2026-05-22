@@ -38,8 +38,16 @@ install_anchor() {
   # Resolve %APPDATA% → Linux path. `cd /` first because Windows
   # binaries invoked via binfmt fail with "Invalid argument" when cwd
   # is under a dot-prefixed path (~/.local/share/...).
+  #
+  # `|| true` inside the substitution — install.sh runs under
+  # set -euo pipefail, so a flaky WSL interop bridge (cmd.exe exits
+  # non-zero, or the binfmt registration was dropped between distros
+  # sharing the lightweight VM) propagates through the pipe and exits
+  # the script silently mid-anchor. Capture into appdata_win and let
+  # the `-z` check below own the soft-fail messaging, same pattern
+  # lib/verify.sh uses for its diagnostic captures.
   local appdata_win appdata
-  appdata_win=$(cd / && cmd.exe /c "echo %APPDATA%" 2>/dev/null | tr -d '\r')
+  appdata_win=$(cd / && cmd.exe /c "echo %APPDATA%" 2>/dev/null | tr -d '\r' || true)
   if [ -z "$appdata_win" ]; then
     ui_warn "couldn't resolve %APPDATA% — skipping"
     return 0

@@ -1,0 +1,16 @@
+# /etc/udev/rules.d/99-wsl-dri.rules
+#
+# WSL2/WSLg's /dev/dri/card* and /dev/dri/renderD* show up with the kernel's
+# default GIDs (39, 108, …). On Fedora those GID numbers happen to land on
+# `video` / `render`, so things "just work". On Ubuntu the same numbers map
+# to unrelated groups (`irc`, `netdev`) — leaving wsl-qol's `usermod -aG
+# video,render` effectively no-ops the GPU access path, libEGL gets
+# `Permission denied`, mutter falls back to swrast, and the RDP session
+# crawls at software-rasterizer speed.
+#
+# Pin the canonical Linux group names so the device-group / user-group
+# relationship is consistent across distros and `pick_gallium_driver=d3d12`
+# can actually open the render node.
+
+KERNEL=="card[0-9]*",    SUBSYSTEM=="drm", GROUP="video",  MODE="0660"
+KERNEL=="renderD[0-9]*", SUBSYSTEM=="drm", GROUP="render", MODE="0666"

@@ -289,6 +289,34 @@ apply_theme_sync() {
     /usr/local/bin/wsl-theme-sync
 }
 
+install_dri_udev_rule() {
+  ui_step "DRI device group ownership (WSL2 udev fix)"
+  # The kernel hands /dev/dri/card* and /dev/dri/renderD* to udev with
+  # default GIDs (39, 108, …). On Fedora those numbers map to `video`
+  # / `render` and things "just work". On Ubuntu they map to unrelated
+  # groups (`irc`, `netdev`), so the `video`/`render` users wsl-qol
+  # adds dylan to can't open the device — libEGL gets Permission
+  # denied, mutter falls back to swrast, and the RDP session runs at
+  # software-rasterizer speed. Drop a udev rule that pins the canonical
+  # group names regardless of distro.
+  ui_spin "Install + reload /etc/udev/rules.d/99-wsl-dri.rules" bash -c '
+    set -e
+    sudo install -m 644 "'"$PROJECT_ROOT"'/extras/wsl-dri-udev.rules" \
+                         /etc/udev/rules.d/99-wsl-dri.rules
+    sudo udevadm control --reload
+    sudo udevadm trigger --subsystem-match=drm
+  '
+  # `udevadm trigger` reapplies the rule on existing nodes, but on
+  # WSL2 the trigger doesn't always re-chown — the dxg-backed devices
+  # are quirky. Apply the change directly too so gnome-shell-headless
+  # finds the correct ownership when install_systemd_units starts it
+  # below.
+  ui_spin "Apply group ownership to current /dev/dri/* nodes" bash -c '
+    sudo chgrp video /dev/dri/card[0-9]* 2>/dev/null || true
+    sudo chgrp render /dev/dri/renderD[0-9]* 2>/dev/null || true
+  '
+}
+
 install_x11_unix_fix() {
   ui_step "WSLg /tmp/.X11-unix fix"
   # WSLg shadows /tmp/.X11-unix on every boot — as a symlink to

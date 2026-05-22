@@ -335,6 +335,7 @@ install_default_wallpaper          # /usr/share/backgrounds/pane-wallpaper.jpg +
 apply_theme_sync                   # re-fire post-packages so gsettings tier lands (wsl-qol's bootstrap fires too early)
 apply_flatpak_sync                 # re-fire post-packages so newly-installed flatpaks publish to Start Menu
 [ "${INSTALL_APPINDICATOR:-1}" = "1" ] && enable_appindicator_extension
+install_dri_udev_rule              # /etc/udev/rules.d/99-wsl-dri.rules — fix Ubuntu's wrong GIDs on /dev/dri/*
 install_x11_unix_fix               # /etc/systemd/system/wslg-x11-unix-fix.service
 install_systemd_units              # write + enable + restart
 [ "${INSTALL_POP_SHELL:-1}" = "1" ] && install_pop_shell

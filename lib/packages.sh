@@ -38,6 +38,16 @@ install_packages() {
     debian-like)
       export DEBIAN_FRONTEND=noninteractive
       ui_spin "Refresh apt index" sudo apt-get update -qq
+      # mesa-vulkan-drivers ships dzn (Mesa's Vulkan-on-D3D12 ICD). On
+      # Ubuntu 26.04 gnome-core doesn't pull it transitively the way
+      # Fedora 44's gnome-shell metapackage does, so without an explicit
+      # add `vulkaninfo --summary` reports "no device found" on a fresh
+      # install. Mutter / gnome-remote-desktop don't need Vulkan, but
+      # GTK 4.20+ defaults to its Vulkan renderer — on NVIDIA hosts dzn
+      # is the "known good" path (diagnose.sh:89); on Intel Arc Xe the
+      # GSK_RENDERER=ngl override already in lib/configure.sh routes GTK
+      # around it. Pulling the package keeps Ubuntu's behaviour matched
+      # to Fedora's.
       ui_spin "Install GNOME + RDP packages (apt)" \
         sudo apt-get install -y --no-install-recommends \
           gnome-remote-desktop \
@@ -45,6 +55,7 @@ install_packages() {
           gnome-shell-extension-appindicator \
           gnome-keyring \
           mutter \
+          mesa-vulkan-drivers \
           openssl \
           xdg-user-dirs \
           dbus-user-session \

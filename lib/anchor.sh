@@ -16,13 +16,25 @@
 # Windows) or logs out — in both cases the anchor re-fires on next
 # Windows logon.
 #
-# Strictly opt-in. INSTALL_ANCHOR=1 to enable; default is 0. When
-# INSTALL_ANCHOR=0 and a previously-installed anchor is present, the
-# function removes the .vbs so toggling the option off cleanly disables
-# persistence.
+# Strictly opt-in. INSTALL_ANCHOR=1 to enable; default is 0. If you
+# previously opted in and want to back out, delete the .vbs from
+# %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup by hand —
+# an opted-out run no longer touches the Windows side, so we don't
+# burn a `cmd.exe` round-trip on the happy default path for users
+# who never wanted persistence in the first place.
 
 install_anchor() {
   ui_step "Distro persistence anchor"
+
+  # Opt-out fast-path. Skip before any Windows interop so a freshly
+  # bootstrapped distro with a flaky binfmt / WSL interop bridge
+  # doesn't surface warnings — or, under install.sh's set -euo
+  # pipefail, silently abort the whole run — for a feature the user
+  # explicitly declined.
+  if [ "${INSTALL_ANCHOR:-0}" != "1" ]; then
+    ui_skip "INSTALL_ANCHOR=0"
+    return 0
+  fi
 
   if ! command -v cmd.exe >/dev/null 2>&1; then
     ui_skip "cmd.exe not available (not WSL?) — skipping"
@@ -59,17 +71,6 @@ install_anchor() {
 
   local startup_dir="$appdata/Microsoft/Windows/Start Menu/Programs/Startup"
   local vbs="$startup_dir/wsl-${distro}-anchor.vbs"
-
-  if [ "${INSTALL_ANCHOR:-0}" != "1" ]; then
-    if [ -f "$vbs" ]; then
-      rm -f "$vbs"
-      ui_ok "Remove $vbs"
-      ui_detail "anchor disabled — distro will terminate on last-client-close"
-    else
-      ui_skip "INSTALL_ANCHOR=0 (no anchor installed)"
-    fi
-    return 0
-  fi
 
   mkdir -p "$startup_dir"
 

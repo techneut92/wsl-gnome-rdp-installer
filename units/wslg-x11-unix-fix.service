@@ -1,26 +1,26 @@
 [Unit]
-Description=Replace WSLg /tmp/.X11-unix symlink with a real directory (so Xwayland can start in the RDP session)
-# WSL's /init re-creates /tmp/.X11-unix as a symlink to /mnt/wslg/.X11-unix
-# on every boot. Mutter's Xwayland refuses to start when /tmp/.X11-unix is
-# a symlink ("Directory \"/tmp/.X11-unix\" is missing the sticky bit") because
-# the X server expects a real directory mode 1777 to bind its abstract
-# sockets in. Once Xwayland fails, gnome-shell-headless falls into a restart
-# loop and the whole RDP session is dead.
+Description=Restore /tmp/.X11-unix to a writable mode-1777 directory (so Xwayland can start in the RDP session)
+# WSLg shadows /tmp/.X11-unix on every boot in one of two layouts:
+#   - legacy: a symlink to /mnt/wslg/.X11-unix
+#   - newer (Ubuntu 26.04+): a read-only tmpfs (sometimes stacked twice)
 #
-# This oneshot replaces the symlink with a real mode-1777 directory and
-# symlinks X0 inside it back to WSLg's X server socket, so DISPLAY=:0 still
-# resolves to WSLg (Linux apps that were going to the Windows desktop via
-# WSLg keep working). Xwayland is then free to create X1/X2 in the same
-# directory for the RDP session.
+# Mutter's Xwayland rejects both ("Directory \"/tmp/.X11-unix\" is
+# missing the sticky bit" / "...is not writable"). Once Xwayland fails,
+# gnome-shell-headless falls into a SIGABRT restart loop and the whole
+# RDP session is dead. The helper does the layout-specific cleanup and
+# re-exposes WSLg's X0 socket so DISPLAY=:0 callers keep working.
+#
+# Earlier revisions guarded this unit with ConditionPathIsSymbolicLink=
+# /tmp/.X11-unix, which became a stealth-skip on Ubuntu 26.04 where
+# the path is no longer a symlink. The helper itself is now idempotent,
+# so no condition is needed.
 After=local-fs.target
 Before=multi-user.target
-ConditionPathIsSymbolicLink=/tmp/.X11-unix
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Use sh -c so the && chain aborts on failure of any step.
-ExecStart=/bin/sh -c 'rm /tmp/.X11-unix && mkdir -m 1777 /tmp/.X11-unix && ln -s /mnt/wslg/.X11-unix/X0 /tmp/.X11-unix/X0'
+ExecStart=/usr/local/bin/wslg-x11-unix-fix
 
 [Install]
 WantedBy=multi-user.target

@@ -249,7 +249,7 @@ extras/
 units/
   gnome-shell-headless.service                 user unit
   gnome-remote-desktop-headless.override.conf  software-EGL override for grd
-  wslg-x11-unix-fix.service                    sticky-bit fix for self-spawned Xwayland
+  wslg-x11-unix-fix.service                    /tmp/.X11-unix layout fix for self-spawned Xwayland
 environment.d/
   10-wsl-gpu.conf                              GALLIUM_DRIVER for client apps (regenerated per host GPU)
   20-gnome-session.conf                        XDG_CURRENT_DESKTOP / SESSION_TYPE

@@ -291,30 +291,32 @@ apply_theme_sync() {
 
 install_x11_unix_fix() {
   ui_step "WSLg /tmp/.X11-unix fix"
-  # WSL's /init recreates /tmp/.X11-unix as a symlink to /mnt/wslg/.X11-unix
-  # on every boot. Mutter's Xwayland refuses to start when that path is a
-  # symlink ("Directory \"/tmp/.X11-unix\" is missing the sticky bit"); on
-  # such a session gnome-shell-headless can't run --no-x11 was dropped, so
-  # we ship a system-level oneshot that replaces the symlink with a real
-  # mode-1777 directory and X0-symlinks WSLg's socket back in (so DISPLAY=:0
-  # still resolves to WSLg apps that go through Windows). Mutter then
-  # spawns its own Xwayland under :1 inside the RDP session.
+  # WSLg shadows /tmp/.X11-unix on every boot — as a symlink to
+  # /mnt/wslg/.X11-unix on older builds, or as a read-only tmpfs
+  # (sometimes stacked twice) on Ubuntu 26.04+. Mutter's Xwayland
+  # rejects both layouts: the symlink fails its sticky-bit check, the
+  # ro tmpfs fails its is-writable check. Once Xwayland fails,
+  # gnome-shell-headless falls into a SIGABRT restart loop and the RDP
+  # session is dead — codeberg #2. Ship a system-level oneshot whose
+  # helper peels off whichever layout WSLg put down, lays down a real
+  # mode-1777 directory in its place, and re-symlinks WSLg's X0 inside
+  # (so DISPLAY=:0 still reaches the host X server).
   ui_spin "Install + enable wslg-x11-unix-fix.service" bash -c '
     set -e
+    sudo install -m 755 "'"$PROJECT_ROOT"'/units/wslg-x11-unix-fix.sh" \
+                         /usr/local/bin/wslg-x11-unix-fix
     sudo install -m 644 "'"$PROJECT_ROOT"'/units/wslg-x11-unix-fix.service" \
                          /etc/systemd/system/wslg-x11-unix-fix.service
     sudo systemctl daemon-reload
     sudo systemctl enable wslg-x11-unix-fix.service
   '
-  # Apply right now if the symlink is still in place from this boot (the
-  # unit's ConditionPathIsSymbolicLink= guard makes it a no-op after the
-  # first run, so re-running the installer is safe).
-  if [ -L /tmp/.X11-unix ]; then
-    ui_spin "Run wslg-x11-unix-fix.service now" \
-      sudo systemctl start wslg-x11-unix-fix.service
-  else
-    ui_skip "/tmp/.X11-unix already a real dir"
-  fi
+  # The helper is idempotent — always run after install so this
+  # boot's WSLg layout gets fixed without waiting for the next
+  # reboot. Important on first install: gnome-shell-headless is
+  # about to start as part of install_systemd_units below, and it
+  # SIGABRTs immediately if /tmp/.X11-unix isn't writable yet.
+  ui_spin "Run wslg-x11-unix-fix.service now" \
+    sudo systemctl start wslg-x11-unix-fix.service
 }
 
 install_systemd_units() {

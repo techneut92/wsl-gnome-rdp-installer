@@ -84,6 +84,30 @@ install_packages() {
   ui_spin "Mask rtkit-daemon.service (no-op + slow on WSL kernel)" \
     sudo systemctl mask rtkit-daemon.service
 
+  # Same class of fix on debian-like only — Ubuntu ships dbus activation
+  # files for hardware-bound system services that never come up on WSL:
+  #
+  #   bluetooth.service     → org.bluez (bluetoothd hardware-discovery loop)
+  #   ModemManager.service  → org.freedesktop.ModemManager1 (no modems)
+  #   fwupd.service         → org.freedesktop.fwupd        (no firmware to flash)
+  #
+  # On Fedora these all fail-fast on the WSL kernel (unit exits non-zero
+  # before dbus times out), but Ubuntu's variants linger and dbus then
+  # waits its full per-call timeout — 25000ms each for bluez +
+  # ModemManager, 25000ms for fwupd. gnome-control-center probes all
+  # three on launch (cc-bluetooth-panel, cc-wwan-panel, the About panel's
+  # firmware section), so Settings appears to hang 30-60s before painting
+  # on Ubuntu. Masking returns "Unit is masked" to dbus immediately and
+  # callers proceed instantly.
+  if [ "$DISTRO_FAMILY" = "debian-like" ]; then
+    ui_spin "Mask bluetooth.service (no BT on WSL kernel; 25s dbus timeout)" \
+      sudo systemctl mask bluetooth.service
+    ui_spin "Mask ModemManager.service (no modems on WSL kernel; 25s dbus timeout)" \
+      sudo systemctl mask ModemManager.service
+    ui_spin "Mask fwupd.service (no firmware to flash on WSL kernel)" \
+      sudo systemctl mask fwupd.service
+  fi
+
   if [ "${INSTALL_DESKTOP:-1}" = "1" ]; then
     install_desktop_apps
   else

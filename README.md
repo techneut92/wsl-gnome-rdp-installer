@@ -262,6 +262,18 @@ environment.d/
 | Distro              | WSL version | Notes                          |
 | ------------------- | ----------- | ------------------------------ |
 | Fedora Linux 44     | 2.7.3.0     | Primary development target.    |
+| Ubuntu 26.04 LTS    | 2.7.3.0     | Secondary target. Several Ubuntu-specific quirks handled by the installer (see below); RDP session matches Fedora performance once the script lands. |
+
+### Ubuntu-specific notes
+
+The Ubuntu pipeline carries extra steps for things Fedora gets for free:
+
+- **`wsl-renderd-modules`'s vgem/vkms loaded in the shared WSL kernel** puts `/dev/dri/card*` and `/dev/dri/renderD*` on the system with kernel-default GIDs (39, 108) — which on Ubuntu map to `irc` / `netdev` instead of `video` / `render`. A udev rule (`/etc/udev/rules.d/99-wsl-dri.rules`) pins the canonical group names so the `video`/`render` users that `wsl-qol` adds actually get device access; without it libEGL silently falls back to swrast.
+- **WSLg shadows `/tmp/.X11-unix` as a read-only tmpfs** on 26.04+ rather than the symlink older WSLg used. The `wslg-x11-unix-fix.service` helper stacks a writable tmpfs over the path and re-symlinks WSLg's `X0` socket inside — without it Mutter's Xwayland refuses to start and gnome-shell-headless SIGABRTs in a loop.
+- **`localsearch-3.service` guards itself with `ConditionEnvironment=XDG_SESSION_CLASS=user`**. PAM-less lingering sessions never plant that var, the service silently skips activation, and dbus then waits its full 120s `service_start_timeout` on every `Tracker3.Miner.Files` call — gnome-control-center's Search panel hits it on every open. The session env file in `environment.d/20-gnome-session.conf` sets the var explicitly.
+- **`bluetooth.service`, `ModemManager.service`, and `fwupd.service`** are masked: their backing daemons hang for the full 25s `service_start_timeout` on dbus activation (Settings panels probe them on launch). On Fedora these same units fail-fast, no mask needed.
+- **`mesa-vulkan-drivers`** is pulled in explicitly — Ubuntu's `gnome-core` doesn't pull it transitively the way Fedora's `gnome-shell` does.
+- **`snapd`** is optional. By default Ubuntu pre-installs snapd plus ~1.5 GB of snaps you didn't pick, and on a headless RDP session the snap stack adds idle CPU, dbus traffic per udev event, and squashfs+cgroup setup cost per launch. The installer prompts during setup; opting in masks `snapd.service` and its sockets (snaps stay on disk, reversible with `systemctl unmask`). Desktop apps in this pipeline come from flatpak — snap interop isn't tuned here.
 
 If you've run this on a different distro/WSL combination and it
 worked (or didn't), open a PR/issue extending this table.

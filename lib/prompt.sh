@@ -58,6 +58,47 @@ _prompt_credentials() {
   fi
 }
 
+_prompt_snapd() {
+  # Only debian-like distros ever ship snapd by default. No-op everywhere
+  # else.
+  [ "$DISTRO_FAMILY" = "debian-like" ] || return 0
+  command -v snap >/dev/null 2>&1 || return 0
+
+  # Already masked from a prior run — don't re-prompt.
+  if systemctl is-enabled snapd.service 2>/dev/null | grep -q '^masked'; then
+    return 0
+  fi
+
+  # Inventory the snaps the distro shipped so the user knows what's
+  # idling. `snap list` needs the daemon up; fall back to the on-disk
+  # listing if it isn't.
+  local snap_count snap_size
+  snap_count=$(snap list 2>/dev/null | tail -n +2 | wc -l)
+  [ "$snap_count" -gt 0 ] 2>/dev/null \
+    || snap_count=$(ls /var/lib/snapd/snaps/*.snap 2>/dev/null | wc -l)
+  snap_size=$(du -shc /var/lib/snapd/snaps/*.snap 2>/dev/null \
+              | tail -1 | awk '{print $1}')
+
+  ui_step "snapd detected"
+  ui_detail "Ubuntu pre-installs snapd + ${snap_count:-?} snaps (~${snap_size:-?} on disk) you didn't pick."
+  ui_detail "On a headless WSL2 GNOME RDP session the snap stack adds idle CPU,"
+  ui_detail "dbus traffic per udev event, and per-launch latency from squashfs +"
+  ui_detail "cgroup setup. We recommend flatpak for desktop apps with this setup;"
+  ui_detail "snap interop isn't tuned here."
+
+  local default_choice=Y
+  case "${SNAPD_DISABLE:-}" in
+    0|no|false|keep)     default_choice=N ;;
+    1|yes|true|disable)  default_choice=Y ;;
+  esac
+  local answer
+  answer=$(ui_input "Mask snapd services? (reversible; leaves snaps on disk) [Y/n]" "$default_choice")
+  case "${answer,,}" in
+    y|yes) SNAPD_DISABLE=1 ;;
+    *)     SNAPD_DISABLE=0 ;;
+  esac
+}
+
 _prompt_components() {
   # Pre-check defaults: everything starts checked unless explicitly
   # overridden (-m flag or `INSTALL_X=0` env). Custom-kernel modules
@@ -151,13 +192,20 @@ prompt_all_settings() {
     INSTALL_POP_SHELL="${INSTALL_POP_SHELL:-1}"
     INSTALL_RENDERD="${INSTALL_RENDERD:-1}"
     INSTALL_ANCHOR="${INSTALL_ANCHOR:-0}"
+    # Non-interactive default: don't touch snapd unless explicitly told to.
+    # Masking system services is invasive; the prompt-path defaults to
+    # "yes mask" because the user is sitting in front of the warning,
+    # but in CI/scripted runs the safe default is to leave it alone.
+    SNAPD_DISABLE="${SNAPD_DISABLE:-0}"
     ui_skip "non-interactive — using env/defaults for everything"
     ui_detail "username=$RDP_USERNAME, reuse=${REUSE_CREDS}"
   else
     _prompt_credentials
     _prompt_components
+    _prompt_snapd
   fi
   export RDP_USERNAME RDP_PASSWORD REUSE_CREDS \
          INSTALL_DESKTOP INSTALL_FIREFOX INSTALL_ONLYOFFICE \
-         INSTALL_POP_SHELL INSTALL_RENDERD INSTALL_ANCHOR
+         INSTALL_POP_SHELL INSTALL_RENDERD INSTALL_ANCHOR \
+         SNAPD_DISABLE
 }

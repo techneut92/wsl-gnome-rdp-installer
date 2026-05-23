@@ -106,6 +106,19 @@ install_packages() {
       sudo systemctl mask ModemManager.service
     ui_spin "Mask fwupd.service (no firmware to flash on WSL kernel)" \
       sudo systemctl mask fwupd.service
+    # snapd is opt-in via the _prompt_snapd prompt (SNAPD_DISABLE=1).
+    # We don't fine-tune snap interop in this pipeline — the apps the
+    # script installs come from flatpak — so when the user opts in we
+    # mask the daemon + sockets to reclaim idle CPU and stop
+    # snap-device-helper from firing on every udev event. Snaps stay
+    # on disk; `systemctl unmask snapd snapd.socket snapd.seeded.service
+    # snapd.apparmor.service` reverses it.
+    if [ "${SNAPD_DISABLE:-0}" = "1" ]; then
+      ui_spin "Mask snapd (user-opted; reversible)" bash -c '
+        sudo systemctl mask \
+          snapd.service snapd.socket snapd.seeded.service snapd.apparmor.service
+      '
+    fi
   fi
 
   if [ "${INSTALL_DESKTOP:-1}" = "1" ]; then

@@ -4,8 +4,13 @@
 # /etc/modules-load.d/ so /dev/dri/renderD128 appears.
 #
 # Why modules instead of a full kernel rebuild?
-#   - Stock Microsoft WSL kernel ships CONFIG_DRM=y + CONFIG_MODULES=y,
-#     so VGEM/VKMS slot in cleanly as out-of-tree modules.
+#   - Stock Microsoft WSL kernel ships CONFIG_MODULES=y, so VGEM/VKMS
+#     slot in cleanly as out-of-tree modules. Kernels up to 6.18.35.x
+#     also had CONFIG_DRM=y built in; since 6.18.40.1 Microsoft ships
+#     DRM off entirely, so the DRM core rides along as modules too
+#     (drm.ko, hdmi.ko, drm_kms_helper.ko, …) — prebuilt tarballs
+#     carry the whole dependency closure, and depmod loads it in the
+#     right order automatically.
 #   - No .wslconfig kernel pinning — user keeps Microsoft's WSL kernel
 #     updates flowing through normally.
 #   - ~30–60s per-module build instead of 5–10 min full bzImage.
@@ -225,13 +230,25 @@ renderd_clone_or_refresh_source() {
 }
 
 # Apply our overlay on top of Microsoft's WSL config:
+#   CONFIG_DRM=m       — DRM core. Microsoft shipped it =y up through
+#                        6.18.35.x, then turned it off entirely in
+#                        6.18.40.1; on those kernels the core must ride
+#                        along as drm.ko. olddefconfig keeps =y on older
+#                        kernels and the closure shrinks back to leaves.
+#   CONFIG_HDMI=m      — infoframe helper lib drm.ko links against.
+#                        Upstream marks it bool (builtin-only), so we
+#                        widen the Kconfig entry to tristate and ship
+#                        hdmi.ko on DRM-less kernels.
 #   CONFIG_DRM_VKMS=m  — virtual KMS (/dev/dri/card*)
 #   CONFIG_DRM_VGEM=m  — virtual GEM render node (/dev/dri/renderD128).
-#                        Already shipped =m by Microsoft on recent kernels
-#                        (6.6.114.1+); kept here so older kernels still
-#                        get coverage and so /lib/modules/.../extra has a
-#                        CRC-matching backup if MS ever drops it.
-#   CONFIG_DRM_GEM_SHMEM_HELPER=m  — VKMS dep, ensure available as module.
+#   CONFIG_DRM_GEM_SHMEM_HELPER=m  — VGEM/VKMS dep, ensure =m.
+#   CONFIG_DRM_FBDEV_EMULATION=n   — fbdev console emulation: useless
+#                        for headless render/KMS nodes.
+#
+# The grep guards at the end fail fast (before the ~10 min build) if
+# olddefconfig silently dropped our options — which is exactly what a
+# missing dependency looks like, and how the 6.18.40.1 DRM-off change
+# originally broke this path.
 #
 # We intentionally KEEP CONFIG_DEBUG_INFO_BTF=y. Microsoft ships its kernel
 # with CONFIG_DEBUG_INFO_BTF_MODULES=y, which adds two fields (btf_data,
@@ -247,15 +264,23 @@ renderd_apply_config() {
   local srcdir=$1
   [ -f "$srcdir/arch/x86/configs/config-wsl" ] \
     || die "arch/x86/configs/config-wsl missing in $srcdir — kernel layout changed?"
-  ui_spin "Configure kernel (VGEM=m, VKMS=m, BTF kept on)" bash -c '
+  ui_spin "Configure kernel (DRM=m, VGEM=m, VKMS=m, BTF kept on)" bash -c '
     set -e
     cd "'"$srcdir"'"
+    sed -i "/^config HDMI\$/{n;s/^\tbool\$/\ttristate/}" drivers/video/Kconfig
+    grep -q MODULE_LICENSE drivers/video/hdmi.c || printf "\n#include <linux/module.h>\nMODULE_LICENSE(\"GPL\");\nMODULE_DESCRIPTION(\"HDMI infoframe helper library\");\n" >> drivers/video/hdmi.c
     cp arch/x86/configs/config-wsl .config
+    ./scripts/config --module  CONFIG_DRM
+    ./scripts/config --module  CONFIG_HDMI
     ./scripts/config --module  CONFIG_DRM_VGEM
     ./scripts/config --module  CONFIG_DRM_VKMS
     ./scripts/config --module  CONFIG_DRM_GEM_SHMEM_HELPER
+    ./scripts/config --disable CONFIG_DRM_FBDEV_EMULATION
     make olddefconfig
-  ' || die "kernel module configuration failed"
+    grep -qE "^CONFIG_DRM=(y|m)\$" .config
+    grep -q  "^CONFIG_DRM_VGEM=m\$"  .config
+    grep -q  "^CONFIG_DRM_VKMS=m\$"  .config
+  ' || die "kernel module configuration failed — VGEM/VKMS didn't survive olddefconfig (Microsoft dropped a DRM dependency from config-wsl?)"
 }
 
 # Build vgem.ko + vkms.ko in-tree. `make modules_prepare` alone doesn't
@@ -288,30 +313,69 @@ renderd_build_modules() {
     || die "vkms.ko missing after build"
 }
 
-# Drop the .ko files into /lib/modules/$(uname -r)/extra and run
-# depmod so modprobe can find them. depmod's index keys off uname -r,
-# so the modules become "the modules for this kernel" — if Microsoft
-# bumps the kernel, our modules vanish from the index and renderD128
-# stops appearing on next boot, prompting the auto-rebuild.
+# Copy vgem.ko + vkms.ko plus their full in-tree runtime dependency
+# closure (drm.ko, hdmi.ko, helpers — whatever modpost recorded in
+# each module's `depends` field) from the build tree into a flat
+# staging dir. On DRM=y kernels the closure collapses to (nearly)
+# just the two leaves; on DRM-less kernels it pulls in the core.
+renderd_stage_closure() {
+  local srcdir=$1 stage=$2
+  bash -c '
+    set -euo pipefail
+    srcdir="'"$srcdir"'"; stage="'"$stage"'"
+    declare -A KO_PATH SEEN
+    while IFS= read -r ko; do
+      n=$(basename "$ko" .ko); KO_PATH[${n//-/_}]=$ko
+    done < <(find "$srcdir" -name "*.ko")
+    ORDER=()
+    resolve() {
+      local name=${1//-/_} dep
+      [ -n "${SEEN[$name]:-}" ] && return 0
+      SEEN[$name]=1
+      [ -n "${KO_PATH[$name]:-}" ] \
+        || { echo "dependency ${name} not among built modules" >&2; exit 1; }
+      for dep in $(modinfo -F depends "${KO_PATH[$name]}" | tr "," " "); do
+        resolve "$dep"
+      done
+      ORDER+=("$name")
+    }
+    resolve vgem
+    resolve vkms
+    mkdir -p "$stage"
+    for n in "${ORDER[@]}"; do cp "${KO_PATH[$n]}" "$stage/"; done
+  ' || die "failed to collect module dependency closure from $srcdir"
+}
+
+# Drop every staged .ko into /lib/modules/$(uname -r)/extra and run
+# depmod so modprobe can find them (and can resolve vgem/vkms → drm →
+# hdmi load ordering from symbols, no manual list needed). depmod's
+# index keys off uname -r, so the modules become "the modules for
+# this kernel" — if Microsoft bumps the kernel, our modules vanish
+# from the index and renderD128 stops appearing on next boot,
+# prompting the auto-rebuild.
 #
-# Args: vgem.ko path, vkms.ko path. Both paths are read by sudo; the
-# files just need to be readable to whoever runs install.sh.
+# Arg: a directory containing the .ko set (prebuilt tarball extract
+# or renderd_stage_closure output). The installed file list is
+# recorded next to the modules for clean uninstall later.
 renderd_install_modules() {
-  local vgem_ko=$1 vkms_ko=$2
+  local stage=$1
   local target_dir; target_dir=$(renderd_modules_dir)
-  ui_spin "Install vgem.ko + vkms.ko → $target_dir" bash -c "
+  ls "$stage"/*.ko >/dev/null 2>&1 || die "no .ko files in $stage"
+  ui_spin "Install kernel modules → $target_dir" bash -c "
     set -e
+    cd '$stage'
     sudo install -d -m 755 '$target_dir'
-    sudo install -m 644 '$vgem_ko' '$target_dir/vgem.ko'
-    sudo install -m 644 '$vkms_ko' '$target_dir/vkms.ko'
+    sudo install -m 644 ./*.ko '$target_dir/'
+    ls ./*.ko | sed 's|^\./||' | sudo tee '$target_dir/wsl-renderd.files' >/dev/null
     sudo depmod -a \"\$(uname -r)\"
   "
 }
 
 # Try to download prebuilt modules from the wsl-renderd-modules repo
-# matching the running kernel. On success, sets RENDERD_PREBUILT_VGEM
-# and RENDERD_PREBUILT_VKMS to the extracted .ko paths and returns 0.
-# On any failure, returns 1 (caller falls back to local build).
+# matching the running kernel. On success, sets RENDERD_PREBUILT_TMPDIR
+# to the extract dir (vgem.ko + vkms.ko + any dependency closure the
+# tarball carries) and returns 0. On any failure, returns 1 (caller
+# falls back to local build).
 #
 # Override the source repo via RENDERD_PREBUILT_URL_BASE — useful when
 # self-hosting or testing from a fork.
@@ -368,15 +432,16 @@ renderd_fetch_prebuilt() {
     return 1
   fi
 
-  RENDERD_PREBUILT_VGEM="$tmpdir/vgem.ko"
-  RENDERD_PREBUILT_VKMS="$tmpdir/vkms.ko"
+  # Newer tarballs (6.18.40.1+) also carry the dependency closure
+  # (drm.ko, hdmi.ko, …) — the whole extract dir gets installed, so
+  # both old two-module and new closure tarballs work unchanged.
   RENDERD_PREBUILT_TMPDIR="$tmpdir"
-  export RENDERD_PREBUILT_VGEM RENDERD_PREBUILT_VKMS RENDERD_PREBUILT_TMPDIR
+  export RENDERD_PREBUILT_TMPDIR
   return 0
 }
 
 # Local build path — fallback when prebuilt download fails.
-# Produces vgem.ko + vkms.ko inside $srcdir's drivers tree.
+# Leaves the installable module set in $RENDERD_STAGE_DIR.
 renderd_local_build() {
   local srcdir=$1
   renderd_preflight
@@ -386,6 +451,9 @@ renderd_local_build() {
   renderd_clone_or_refresh_source "$tag" "$srcdir"
   renderd_apply_config            "$srcdir"
   renderd_build_modules           "$srcdir"
+  RENDERD_STAGE_DIR=$(mktemp -d)
+  export RENDERD_STAGE_DIR
+  renderd_stage_closure "$srcdir" "$RENDERD_STAGE_DIR"
 }
 
 # Persist module loading across boots. systemd-modules-load.service
@@ -438,14 +506,27 @@ renderd_add_user_groups() {
 # box in the menu after previously opting in.
 renderd_uninstall() {
   ui_step "renderd modules: uninstall"
-  ui_spin "rmmod vkms + vgem (if loaded)" bash -c '
-    sudo rmmod vkms 2>/dev/null || true
-    sudo rmmod vgem 2>/dev/null || true
+  # modprobe -r also unloads deps that became unused (drm, hdmi, …
+  # on DRM-less kernels); rmmod is the fallback for the leaves.
+  ui_spin "Unload vkms + vgem (+ now-unused deps)" bash -c '
+    sudo modprobe -r vkms vgem 2>/dev/null || {
+      sudo rmmod vkms 2>/dev/null || true
+      sudo rmmod vgem 2>/dev/null || true
+    }
   '
   local d; d=$(renderd_modules_dir)
-  if [ -f "$d/vgem.ko" ] || [ -f "$d/vkms.ko" ]; then
-    ui_spin "Remove .ko files + depmod" bash -c '
-      sudo rm -f "'"$d"'"/vgem.ko "'"$d"'"/vkms.ko
+  if [ -f "$d/wsl-renderd.files" ] || [ -f "$d/vgem.ko" ] || [ -f "$d/vkms.ko" ]; then
+    ui_spin "Remove installed .ko files + depmod" bash -c '
+      d="'"$d"'"
+      if [ -f "$d/wsl-renderd.files" ]; then
+        while IFS= read -r f; do
+          case $f in *.ko) sudo rm -f "$d/$f" ;; esac
+        done < "$d/wsl-renderd.files"
+        sudo rm -f "$d/wsl-renderd.files"
+      else
+        # pre-closure installs recorded no file list
+        sudo rm -f "$d"/vgem.ko "$d"/vkms.ko
+      fi
       sudo depmod -a "$(uname -r)"
     '
   fi
@@ -515,10 +596,9 @@ install_renderd_kernel() {
   # Try the prebuilt path first (5–10s download vs. 60–90s local build).
   # Falls back to local build on any failure: 404, network down, version
   # mismatch (custom kernel), checksum/format issue.
-  local vgem_ko vkms_ko
+  local module_dir
   if [ "${RENDERD_LOCAL_BUILD:-0}" != "1" ] && renderd_fetch_prebuilt; then
-    vgem_ko="$RENDERD_PREBUILT_VGEM"
-    vkms_ko="$RENDERD_PREBUILT_VKMS"
+    module_dir="$RENDERD_PREBUILT_TMPDIR"
   else
     [ "${RENDERD_LOCAL_BUILD:-0}" = "1" ] \
       && ui_detail "RENDERD_LOCAL_BUILD=1 — skipping prebuilt download"
@@ -526,12 +606,12 @@ install_renderd_kernel() {
     srcdir=${RENDERD_SRCDIR:-$HOME/.cache/wsl-gnome-rdp/WSL2-Linux-Kernel}
     mkdir -p "$(dirname "$srcdir")"
     renderd_local_build "$srcdir"
-    vgem_ko="$srcdir/drivers/gpu/drm/vgem/vgem.ko"
-    vkms_ko="$srcdir/drivers/gpu/drm/vkms/vkms.ko"
+    module_dir="$RENDERD_STAGE_DIR"
   fi
 
-  renderd_install_modules "$vgem_ko" "$vkms_ko"
+  renderd_install_modules "$module_dir"
   [ -n "${RENDERD_PREBUILT_TMPDIR:-}" ] && rm -rf "$RENDERD_PREBUILT_TMPDIR"
+  [ -n "${RENDERD_STAGE_DIR:-}" ] && rm -rf "$RENDERD_STAGE_DIR"
   renderd_persist_load
   renderd_modprobe_now
   renderd_add_user_groups
